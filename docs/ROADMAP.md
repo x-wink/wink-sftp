@@ -90,7 +90,7 @@ Agent 协作：
 
 - [x] **工具链现代化**：oxlint/oxfmt 取代 eslint/prettier；pnpm + TypeScript 6 + tsx；changelogen 取代 conventional-changelog-cli；移除 husky/lint-staged，提交信息改由 CI 的 commitlint job 校验。代码风格：4 空格 / 单引号 / 无分号、`import type` 显式。
 - [x] **CI / 发布**：lint + format + typecheck + test + build 作为门禁（Node 22/24）+ Node 18 运行时下限冒烟；推送 `v*` tag 触发自动发布 npm，经 OIDC 可信发布（无 token，自动 provenance 供应链溯源）。待补：状态徽章。
-- [ ] **测试覆盖完善**：在 Phase 1 的 vitest 骨架上补全 override / clear / 并发 / 密钥登录等用例，建立覆盖率门槛，加本地 SSH/SFTP mock。
+- [x] **测试覆盖完善**：加本地 SSH/SFTP mock（`test/deploy.mock.test.ts`）端到端覆盖 override / clear / 重试 / 前置命令次序 / 审计；补 logger / errors / exec 错误路径用例；`@vitest/coverage-v8` 建立覆盖率门槛（CI 跑 `test:coverage`，stmts≥90 / branch≥85 / func≥85 / lines≥90）。
 - [x] **贡献者体验**：`CONTRIBUTING.md`、Issue/PR 模板（`.github/`）、`LICENSE`（MIT）文件。
 
 ---

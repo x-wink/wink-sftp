@@ -32,13 +32,14 @@ Source is modular under `src/`:
 - `logger.ts` — leveled logging (human → stderr, `--json` → stdout) + `redact` (secret masking).
 - `errors.ts` — typed errors carrying exit codes.
 
-Unit tests live in `test/` (vitest), covering the pure modules.
+Unit tests live in `test/` (vitest)：纯模块逐一覆盖，`test/deploy.mock.test.ts` 用 `vi.mock('ssh2')` 桩端到端测 `deploy` 编排（override/clear/重试/审计）。覆盖率门槛见 `vitest.config.ts`（CI 跑 `test:coverage`，排除 `index.ts`）。
 
 ## Commands
 
 ```bash
 pnpm dev            # tsx src/index.ts -c sftp.json（无需构建）
 pnpm test           # vitest
+pnpm run test:coverage  # vitest + v8 覆盖率门槛（CI 跑此项）
 pnpm run typecheck  # tsc --noEmit
 pnpm run lint       # oxlint --fix（lint:check 不修复，用于 CI）
 pnpm run format     # oxfmt .（format:check 用于 CI）

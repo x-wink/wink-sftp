@@ -1,6 +1,7 @@
 node_modules
 dist
 types
+coverage
 .DS_Store
 stats.html
 *.local
