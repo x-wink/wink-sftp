@@ -11,8 +11,8 @@ jobs:
         runs-on: ubuntu-latest
         strategy:
             matrix:
-                # 开发工具链（vitest 4 / TS 6）需 Node 20+
-                node-version: [20, 22, 24]
+                # 开发工具链需 Node 22+（pnpm 11 依赖 node:sqlite，Node 20 会报 ERR_UNKNOWN_BUILTIN_MODULE）
+                node-version: [22, 24]
         steps:
             - uses: actions/checkout@v4
 
@@ -72,6 +72,7 @@ jobs:
               run: git log -1 --pretty=%B | pnpm exec commitlint --verbose
 
     # 验证发布产物在 engines 声明的 Node 18 下限上可执行
+    # 用 Node 22 装依赖 + 构建（pnpm 11 需 22+），再切到 Node 18 仅跑产物冒烟
     runtime-floor:
         runs-on: ubuntu-latest
         steps:
@@ -80,10 +81,10 @@ jobs:
             - name: Setup pnpm
               uses: pnpm/action-setup@v4
 
-            - name: Setup Node.js 18
+            - name: Setup Node.js 22 (构建工具链)
               uses: actions/setup-node@v4
               with:
-                  node-version: 18
+                  node-version: 22
                   cache: pnpm
 
             - name: Install dependencies
@@ -92,5 +93,10 @@ jobs:
             - name: Build
               run: pnpm run build
 
-            - name: Smoke test bundled CLI
+            - name: Setup Node.js 18 (运行时下限)
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 18
+
+            - name: Smoke test bundled CLI on Node 18
               run: node dist/index.js --help
