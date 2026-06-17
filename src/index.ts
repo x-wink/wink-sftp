@@ -18,6 +18,7 @@ const renderHuman = (r: DeployResult): void => {
         r.commands.forEach((c) => console.error('    $ ' + c))
     }
     if (r.dirs.length) console.error(`  远程目录（${r.dirs.length}）`)
+    r.warnings.forEach((w) => console.error('  ⚠ ' + w))
     console.error(`  传输 ${r.transferred.length} / 跳过 ${r.skipped.length} / 失败 ${r.failed.length}`)
     r.failed.forEach((f) => console.error(`    ✗ ${f.target}：${f.error}`))
 }

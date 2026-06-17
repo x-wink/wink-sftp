@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { linuxPath, remoteIsDir, buildRemoteTarget, buildRemoteDir } from '../src/pathmap'
+import { linuxPath, remoteIsDir, buildRemoteTarget, buildRemoteDir, findFlatCollisions } from '../src/pathmap'
 
 describe('linuxPath', () => {
     it('始终用 / 拼接，归一反斜杠', () => {
@@ -69,5 +69,28 @@ describe('buildRemoteDir', () => {
     })
     it('根目录自身映射到 remote', () => {
         expect(buildRemoteDir('/local/proj', '/local/proj', '/apps/app')).toBe('/apps/app')
+    })
+})
+
+describe('findFlatCollisions', () => {
+    it('无同名目标时返回空数组', () => {
+        expect(
+            findFlatCollisions([
+                { file: '/l/a.js', target: '/r/a.js' },
+                { file: '/l/b.js', target: '/r/b.js' },
+            ])
+        ).toEqual([])
+    })
+    it('同一远程目标对应多个源文件时报告冲突', () => {
+        expect(
+            findFlatCollisions([
+                { file: '/l/x/a.js', target: '/r/a.js' },
+                { file: '/l/y/a.js', target: '/r/a.js' },
+                { file: '/l/b.js', target: '/r/b.js' },
+            ])
+        ).toEqual([{ target: '/r/a.js', files: ['/l/x/a.js', '/l/y/a.js'] }])
+    })
+    it('空列表安全', () => {
+        expect(findFlatCollisions([])).toEqual([])
     })
 })

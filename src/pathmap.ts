@@ -36,3 +36,27 @@ export const buildRemoteTarget = (
 /** 计算单个本地目录对应的远程目录路径（POSIX），用于 `mkdir -p`。 */
 export const buildRemoteDir = (dir: string, local: string, remote: string): string =>
     linuxPath(remote, path.relative(local, dir))
+
+/** 一处同名覆盖：同一远程目标对应多个本地源文件。 */
+export interface FlatCollision {
+    target: string
+    files: string[]
+}
+
+/**
+ * 找出映射到同一远程目标的多个本地文件（flat 模式下不同子目录同名文件会互相覆盖）。
+ * 纯函数：仅按 `target` 分组，返回有冲突的组（保持首次出现顺序）。
+ */
+export const findFlatCollisions = (targets: readonly { file: string; target: string }[]): FlatCollision[] => {
+    const byTarget = new Map<string, string[]>()
+    for (const { file, target } of targets) {
+        const files = byTarget.get(target)
+        if (files) files.push(file)
+        else byTarget.set(target, [file])
+    }
+    const collisions: FlatCollision[] = []
+    for (const [target, files] of byTarget) {
+        if (files.length > 1) collisions.push({ target, files })
+    }
+    return collisions
+}

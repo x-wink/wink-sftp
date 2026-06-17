@@ -2,7 +2,7 @@ import { Client } from 'ssh2'
 import type { ConnectConfig, SFTPWrapper } from 'ssh2'
 import fs from 'node:fs'
 import { scan } from './scanner'
-import { resolveLocal, remoteIsDir, buildRemoteTarget, buildRemoteDir } from './pathmap'
+import { resolveLocal, remoteIsDir, buildRemoteTarget, buildRemoteDir, findFlatCollisions } from './pathmap'
 import { execCommand, shellQuote } from './exec'
 import { mapPool, DEFAULT_CONCURRENCY } from './pool'
 import { withRetry, DEFAULT_RETRIES } from './retry'
@@ -68,6 +68,8 @@ export interface DeployResult {
     dirs: string[]
     /** 已执行（或预演将执行）的远程命令。 */
     commands: string[]
+    /** 非致命告警（如 flat 模式同名覆盖）。 */
+    warnings: string[]
 }
 
 const DEFAULT_MODE = 0o777
@@ -154,12 +156,17 @@ const computePlan = (config: ResolvedConfig) => {
         file,
         target: buildRemoteTarget(file, { local, remote, remoteIsDir: isDir, flat }),
     }))
-    return { local, remote, opts, isDir, remoteDirs, targets }
+    const warnings = flat
+        ? findFlatCollisions(targets).map(
+              (c) => `flat 模式同名覆盖：${c.target} ← ${c.files.join('、')}（仅最后传入者生效）`
+          )
+        : []
+    return { local, remote, opts, isDir, remoteDirs, targets, warnings }
 }
 
 /** 预演：仅本地计算将执行的动作，不建立连接、不落地。 */
 const planDeploy = (config: ResolvedConfig): DeployResult => {
-    const { local, remote, opts, isDir, remoteDirs, targets } = computePlan(config)
+    const { local, remote, opts, isDir, remoteDirs, targets, warnings } = computePlan(config)
     const commands: string[] = []
     if (opts.beforeRunCommand) commands.push(opts.beforeRunCommand)
     if (isDir && opts.clear) {
@@ -177,6 +184,7 @@ const planDeploy = (config: ResolvedConfig): DeployResult => {
         failed: [],
         dirs: remoteDirs,
         commands,
+        warnings,
     }
 }
 
@@ -196,8 +204,9 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
         commands.push(opts.beforeRunCommand)
     }
 
-    const { local, remote, isDir, remoteDirs, targets } = computePlan(config)
+    const { local, remote, isDir, remoteDirs, targets, warnings } = computePlan(config)
     logger.debug('待传输文件数：' + targets.length)
+    warnings.forEach((w) => logger.warn('⚠ ' + w))
 
     if (isDir && opts.clear) {
         assertSafeClearTarget(remote)
@@ -216,12 +225,16 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
     const transferred: string[] = []
     const skipped: string[] = []
     const failed: DeployResult['failed'] = []
+    const total = targets.length
+    let done = 0
+    const progress = (status: string, target: string) => logger.info(`[${++done}/${total}] ${status} ${target}`)
     // 受限并发传输：同一时刻最多 concurrency 个文件在飞
     await mapPool(targets, concurrency, async ({ file, target }) => {
         try {
             if (!opts.override && (await remoteExists(client, target))) {
                 logger.debug('文件已存在，跳过：' + target)
                 skipped.push(target)
+                progress('跳过', target)
                 return
             }
             logger.debug(`开始传输：${file} => ${target}`)
@@ -234,8 +247,10 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
                     ),
             })
             transferred.push(target)
+            progress('已传', target)
         } catch (e) {
             failed.push({ target, error: e instanceof Error ? e.message : String(e) })
+            progress('失败', target)
         }
     })
 
@@ -255,6 +270,7 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
         failed,
         dirs: remoteDirs,
         commands,
+        warnings,
     }
 }
 
