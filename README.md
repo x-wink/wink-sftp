@@ -30,12 +30,15 @@
 
 - 🚀 一条命令把本地目录递归部署到远程
 - 📄 JSON 配置文件，便于纳入版本管理与多项目复用
-- 🪝 传输前后执行远程命令（停服 / 重启 / 解压…）
-- 🧹 可选清空远程目录、覆盖已有文件、扁平化目录结构
+- 🔑 密码或 SSH 密钥登录（`privateKey` / `passphrase`），明文密码不适合 CI
+- 🪝 传输前后执行远程命令（停服 / 重启 / 解压…），前置命令在扫描前执行，产物可纳入传输
+- 🧹 可选清空远程目录、覆盖已有文件、扁平化目录结构（flat 同名覆盖会预警）
 - 🙈 自动跳过隐藏文件，支持按路径排除
-- 🔍 `--dry-run` 预演（不连接、不落地）与 `--json` 机器可读输出
+- ⚡ 受限并发传输 + 单文件失败自动重试，扛得住数百文件与网络抖动
+- 📋 写操作本地审计日志（何时 / 哪台 / 什么动作 / 结果）
+- 🔍 `--dry-run` 预演（不连接、不落地）与 `--json` 机器可读输出，并提供 deploy Skill 供 Claude 直接调用
 - 🔢 分类退出码，失败可被脚本 / CI 捕获
-- 🔒 远程命令参数自动转义防注入、调试日志对密码脱敏、`clear` 危险路径护栏
+- 🔒 远程命令参数自动转义防注入、调试日志对密码/密钥脱敏、`clear` 危险路径护栏
 
 ## 📥 安装
 
@@ -59,6 +62,14 @@ npx wink-sftp -l ./dist -r /apps/myapp -h 192.168.1.10 -p 22 -u root --connect-p
 ```
 
 > 提示：`-h` 在本工具中表示**远程主机**；查看帮助请用 `--help`。
+
+也可用 **SSH 密钥登录**（推荐用于 CI / 生产，省去明文密码）：
+
+```bash
+npx wink-sftp -l ./dist -r /apps/myapp -h 192.168.1.10 -p 22 -u root \
+  --connect-private-key ~/.ssh/id_rsa
+# 加密私钥再加 --connect-passphrase '***'
+```
 
 更推荐把参数写进配置文件（见下），命令里就只剩一个 `-c`。
 
@@ -101,23 +112,27 @@ npx wink-sftp -c ./sftp.json
 
 ### 配置项
 
-| 字段                           | 类型     | 默认    | 说明                                           |
-| ------------------------------ | -------- | ------- | ---------------------------------------------- |
-| `local`                        | string   | —       | 本地路径（必填）                               |
-| `remote`                       | string   | —       | 远程路径（必填）                               |
-| `debug`                        | boolean  | `false` | 输出调试日志（走 stderr）                      |
-| `connect.host`                 | string   | —       | 远程服务器地址（必填）                         |
-| `connect.port`                 | number   | —       | 远程服务器端口（必填）                         |
-| `connect.username`             | string   | —       | 用户名（必填）                                 |
-| `connect.password`             | string   | —       | 密码（必填，当前仅支持密码登录）               |
-| `sftpOptions.excludes`         | string[] | `[]`    | 要排除的本地目录，目前仅支持全字匹配           |
-| `sftpOptions.flat`             | boolean  | `false` | 扁平化目录：任意深度的文件都直接传到远程目录下 |
-| `sftpOptions.clear`            | boolean  | `false` | 传输前清空远程目录（高危，见安全须知）         |
-| `sftpOptions.override`         | boolean  | `false` | 覆盖远程已存在的同名文件                       |
-| `sftpOptions.ignoreHidden`     | boolean  | `true`  | 忽略隐藏文件/目录（以 `.` 开头的路径段）       |
-| `sftpOptions.mode`             | number   | `0o777` | 远程文件权限 mode                              |
-| `sftpOptions.beforeRunCommand` | string   | —       | 传输开始前执行的远程命令                       |
-| `sftpOptions.afterRunCommand`  | string   | —       | 传输完成后执行的远程命令                       |
+| 字段                           | 类型     | 默认    | 说明                                             |
+| ------------------------------ | -------- | ------- | ------------------------------------------------ |
+| `local`                        | string   | —       | 本地路径（必填）                                 |
+| `remote`                       | string   | —       | 远程路径（必填）                                 |
+| `debug`                        | boolean  | `false` | 输出调试日志（走 stderr）                        |
+| `connect.host`                 | string   | —       | 远程服务器地址（必填）                           |
+| `connect.port`                 | number   | —       | 远程服务器端口（必填）                           |
+| `connect.username`             | string   | —       | 用户名（必填）                                   |
+| `connect.password`             | string   | —       | 密码（与 `privateKey` 二选一）                   |
+| `connect.privateKey`           | string   | —       | 私钥内容（密钥登录，与 `password` 二选一）       |
+| `connect.passphrase`           | string   | —       | 私钥口令（加密私钥时需要）                       |
+| `sftpOptions.excludes`         | string[] | `[]`    | 要排除的本地目录，目前仅支持全字匹配             |
+| `sftpOptions.flat`             | boolean  | `false` | 扁平化目录：任意深度的文件都直接传到远程目录下   |
+| `sftpOptions.clear`            | boolean  | `false` | 传输前清空远程目录（高危，见安全须知）           |
+| `sftpOptions.override`         | boolean  | `false` | 覆盖远程已存在的同名文件                         |
+| `sftpOptions.ignoreHidden`     | boolean  | `true`  | 忽略隐藏文件/目录（以 `.` 开头的路径段）         |
+| `sftpOptions.mode`             | number   | `0o777` | 远程文件权限 mode                                |
+| `sftpOptions.concurrency`      | number   | `5`     | 传输与建目录的并发上限（避免打满 `MaxSessions`） |
+| `sftpOptions.retries`          | number   | `2`     | 单文件传输失败的额外重试次数（线性退避）         |
+| `sftpOptions.beforeRunCommand` | string   | —       | 传输开始前执行的远程命令（在扫描前执行）         |
+| `sftpOptions.afterRunCommand`  | string   | —       | 传输完成后执行的远程命令                         |
 
 ## ⌨️ 命令行选项
 
@@ -131,18 +146,24 @@ npx wink-sftp -c ./sftp.json
 | `-h, --connect-host <host>`     | `connect.host`                 | 远程服务器地址                                 |
 | `-p, --connect-port <port>`     | `connect.port`                 | 远程服务器端口                                 |
 | `-u, --connect-username <user>` | `connect.username`             | 用户名                                         |
-| `--connect-password <pwd>`      | `connect.password`             | 密码                                           |
+| `--connect-password <pwd>`      | `connect.password`             | 密码（与私钥二选一）                           |
+| `--connect-private-key <path>`  | `connect.privateKey`           | 私钥文件路径（相对启动目录），读为内容         |
+| `--connect-passphrase <pass>`   | `connect.passphrase`           | 私钥口令（加密私钥时需要）                     |
 | `-e, --sftp-excludes <paths>`   | `sftpOptions.excludes`         | 排除目录，多个以英文逗号分隔                   |
 | `-f, --sftp-flat`               | `sftpOptions.flat`             | 扁平化目录                                     |
 | `--sftp-clear`                  | `sftpOptions.clear`            | 传输前清空远程目录（高危）                     |
 | `-o, --sftp-override`           | `sftpOptions.override`         | 覆盖已存在文件                                 |
 | `-i, --sftp-ignore-hidden`      | `sftpOptions.ignoreHidden`     | 忽略隐藏文件/目录                              |
 | `-m, --sftp-mode <mode>`        | `sftpOptions.mode`             | 远程文件 mode（按八进制解析，如 `755`）        |
+| `--sftp-concurrency <n>`        | `sftpOptions.concurrency`      | 传输与建目录的并发上限（默认 5）               |
+| `--sftp-retries <n>`            | `sftpOptions.retries`          | 单文件传输失败的额外重试次数（默认 2）         |
 | `--before-run-command <cmd>`    | `sftpOptions.beforeRunCommand` | 传输前执行的远程命令                           |
 | `--after-run-command <cmd>`     | `sftpOptions.afterRunCommand`  | 传输后执行的远程命令                           |
 | `--debug`                       | `debug`                        | 输出调试日志（走 stderr）                      |
 | `--dry-run`                     | —                              | 预演：打印将执行的动作但不连接、不落地         |
 | `--json`                        | —                              | 结构化结果输出到 stdout，便于脚本 / agent 解析 |
+| `--audit-log <path>`            | —                              | 审计日志路径（默认 `~/.wink-sftp/audit.log`）  |
+| `--no-audit`                    | —                              | 禁用本地审计日志                               |
 | `--help`                        | —                              | 显示帮助                                       |
 | `-V, --version`                 | —                              | 显示版本号                                     |
 
@@ -185,6 +206,7 @@ npx wink-sftp -c ./sftp.json --json | jq '.transferred'
     "failed": [], // 传输失败项：[{ target, error }]
     "dirs": [], // 已创建（预演时为将创建）的远程目录
     "commands": [], // 已执行（预演时为将执行）的远程命令
+    "warnings": [], // 非致命告警（如 flat 模式同名覆盖）
 }
 ```
 
@@ -204,17 +226,32 @@ npx wink-sftp -c ./sftp.json --json | jq '.transferred'
 ## ⚠️ 安全须知
 
 - **`clear` 会执行 `rm -rf` 清空远程目录，属高危操作**。请务必确认 `remote` 指向正确；工具已内置护栏拒绝清空空路径 / `/` 等危险目标，但仍建议先 `--dry-run` 预演。
-- 当前仅支持密码登录，SSH 密钥登录在路线图中。
-- `--debug` 打印配置时会自动对密码等敏感字段脱敏。
-- 建议不要在命令行明文写密码，优先用配置文件（加入 `.gitignore`）或 CI 密钥。
+- 支持密码或 SSH 密钥登录（`--connect-private-key` 传私钥文件路径）。**CI / 生产优先用密钥登录**，明文密码不适合 CI。
+- `--debug` 打印配置时会自动对密码 / 密钥 / 口令等敏感字段脱敏。
+- 建议不要在命令行明文写密码，优先用配置文件（加入 `.gitignore`）、密钥或 CI 密钥注入。
+- 实跑默认在 `~/.wink-sftp/audit.log` 追加审计记录，便于事后排查；可用 `--audit-log` 改路径、`--no-audit` 关闭。
 
 ## 🤖 与脚本 / AI Agent 集成
 
 `--json`（机器输出走 stdout、人类日志走 stderr）、`--dry-run`（安全预演）与分类退出码共同保证：调用方能可靠判断成败、并在真正落地前预览动作。推荐流程：先 `--dry-run --json` 让用户/agent 确认，再去掉 `--dry-run` 真跑，最后凭退出码与 `.failed` 判断结果。
 
+### Claude Code Skill
+
+本包随附一个 **deploy Skill**，封装「先预演 → 人工确认 → 真跑 → 按退出码/`ok`/`failed[]` 判定」的安全部署流程。在你自己的项目里启用它，让 Claude 直接按规约调用 `wink-sftp`：
+
+```bash
+# 在你的项目根目录执行：把随包发布的 Skill 拷到项目的 .claude/skills/
+mkdir -p .claude/skills/deploy
+cp node_modules/@xwink/sftp/.claude/skills/deploy/SKILL.md .claude/skills/deploy/
+```
+
+之后让 Claude「用 wink-sftp 部署到服务器」即可触发；它会先 `--dry-run --json` 给你确认、危险操作（如 `--sftp-clear`）显式征求同意，再真跑并按结构化结果回报。
+
+> 未来计划提供 `wink-sftp skill install` 子命令免去手动拷贝，详见路线图。
+
 ## 🗺️ 路线图
 
-当前 `v1.x` 聚焦把「部署」这条线做到可信、好用。后续将推进健壮性加固（并发/重试/密钥登录/审计）、增量传输与多环境配置，并逐步扩展为面向单机全生命周期的「SSH 快捷操作入口」。完整规划见 [docs/ROADMAP.md](./docs/ROADMAP.md) 与 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
+当前 `v1.x` 聚焦把「部署」这条线做到可信、好用：v1.1 完成安全/正确性止血与 `--json`/`--dry-run`；v1.2 加固健壮性（并发/重试）、补 SSH 密钥登录与审计、交付 deploy Skill。后续将推进增量传输与多环境配置，并逐步扩展为面向单机全生命周期的「SSH 快捷操作入口」。完整规划见 [docs/ROADMAP.md](./docs/ROADMAP.md) 与 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
 
 ## 🛠️ 本地开发
 
@@ -222,6 +259,7 @@ npx wink-sftp -c ./sftp.json --json | jq '.transferred'
 pnpm install        # 安装依赖（本仓库使用 pnpm）
 pnpm dev            # 以 tsx 直接运行（默认读取 sftp.json）
 pnpm test           # 运行 vitest 单测
+pnpm run test:coverage  # 单测 + 覆盖率门槛（CI 跑此项）
 pnpm run lint       # oxlint 检查并自动修复
 pnpm run format     # oxfmt 格式化（4 空格 / 单引号 / 无分号）
 pnpm run typecheck  # tsc 类型检查

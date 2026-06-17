@@ -195,6 +195,8 @@ stack:
 └── scripts/            # 可选：固化 dry-run → 确认 → 真跑 流程
 ```
 
+**分发给最终用户**：Skill 既供本仓库贡献者使用，也随 npm 包发布（`package.json#files` 含 `.claude/skills`）。**现状（v1.2）**：用户从 `node_modules/@xwink/sftp/.claude/skills/` 手动拷贝到自己项目的 `.claude/skills/`，README 给出指引。**规划**：在 Phase 5 子命令体系内提供 `wink-sftp skill install [name]`，自动把随包 Skill 落到用户项目 `.claude/skills/`（或 `~/.claude/skills/`），免去手动拷贝；与 status/logs/provision 等子命令一并扩展可安装的 Skill 集。
+
 **不用 MCP**：MCP 收益主要在跨平台与代码级护栏；护栏既已做进 CLI（任何调用方都安全），MCP 优势被削弱。待出现跨平台 agent 需求时，可基于 `SshSession` 编程式 API 低成本封装。
 
 ---

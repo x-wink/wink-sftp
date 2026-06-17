@@ -24,7 +24,8 @@
     },
     "files": [
         "dist/src/*.d.ts",
-        "dist/index.js"
+        "dist/index.js",
+        ".claude/skills"
     ],
     "main": "dist/index.js",
     "types": "dist/src/index.d.ts",
