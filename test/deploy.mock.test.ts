@@ -162,4 +162,41 @@ describe('deploy（mock ssh2）', () => {
         expect(rec).toMatchObject({ action: 'deploy', ok: true, host: 'srv', username: 'deployer' })
         expect(rec.detail.transferred).toBe(3)
     })
+
+    // 回归：CLI --no-audit（options.audit === false）必须覆盖配置文件 audit:true
+    it('CLI --no-audit 覆盖配置文件 audit:true', async () => {
+        const auditLog = path.join(localDir, 'audit.log')
+        const cfgPath = path.join(localDir, 'sftp.json')
+        fs.writeFileSync(
+            cfgPath,
+            JSON.stringify({
+                connect: { host: 'h', port: 22, username: 'u', password: 'pw' },
+                local: localDir,
+                remote: REMOTE,
+                audit: true,
+                auditLog,
+                sftpOptions: { override: true },
+            })
+        )
+        await run({ config: cfgPath, audit: false })
+        expect(fs.existsSync(auditLog)).toBe(false)
+    })
+
+    it('配置文件 audit:true 且未传 --no-audit 时照常写审计（对照）', async () => {
+        const auditLog = path.join(localDir, 'audit.log')
+        const cfgPath = path.join(localDir, 'sftp.json')
+        fs.writeFileSync(
+            cfgPath,
+            JSON.stringify({
+                connect: { host: 'h', port: 22, username: 'u', password: 'pw' },
+                local: localDir,
+                remote: REMOTE,
+                audit: true,
+                auditLog,
+                sftpOptions: { override: true },
+            })
+        )
+        await run({ config: cfgPath })
+        expect(fs.existsSync(auditLog)).toBe(true)
+    })
 })

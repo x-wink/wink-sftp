@@ -66,7 +66,7 @@ pnpm run release    # build + changelogen --release --push（改版本/CHANGELOG
 
 ## CLI ↔ config mapping
 
-`src/index.ts` 把 Commander 的扁平选项映射成嵌套的 `RunOption`/`SftpOption`（`--connect-host` → `connect.host`，`--sftp-flat` → `sftpOptions.flat`）。`mode` 按八进制、`port` 按数值解析；`--json`/`--dry-run`/`--debug` 是调用级开关（叠加在 `-c` 配置文件之上）。新增选项时须同时更新：Commander 的 `.option(...)`、该映射对象、`core.ts` 的接口。
+`src/index.ts` 把 Commander 的扁平选项映射成嵌套的 `RunOption`/`SftpOption`（`--connect-host` → `connect.host`，`--sftp-flat` → `sftpOptions.flat`）。`mode` 按八进制、`port` 按数值解析；`--json`/`--dry-run`/`--debug` 是调用级开关（叠加在 `-c` 配置文件之上）。审计同属调用级覆盖：CLI `--no-audit`（`options.audit === false`）与 `--audit-log` 优先于配置文件的 `audit`/`auditLog`。新增选项时须同时更新：Commander 的 `.option(...)`、该映射对象、`core.ts` 的接口。
 
 > commander 15 不允许多字符短 flag：password / clear / before / after 均为长 flag（`--connect-password` / `--sftp-clear` / `--before-run-command` / `--after-run-command`）；`-h` 用作 host，帮助走 `--help`。
 

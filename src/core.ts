@@ -116,8 +116,10 @@ const resolveConfig = (options: RunOption = {}): ResolvedConfig => {
         debug,
         json: (raw.json ?? false) || cliJson,
         dryRun: (raw.dryRun ?? false) || cliDryRun,
-        audit: raw.audit ?? options.audit ?? true,
-        auditLog: raw.auditLog ?? options.auditLog ?? defaultAuditPath(),
+        // 调用级开关优先于配置文件：CLI 显式 --no-audit（options.audit === false）必须生效，
+        // 否则取配置文件值、再默认开启；auditLog 同理由 CLI 覆盖文件。
+        audit: options.audit === false ? false : (raw.audit ?? true),
+        auditLog: options.auditLog ?? raw.auditLog ?? defaultAuditPath(),
     }
 }
 
@@ -326,7 +328,8 @@ const recordAudit = (config: ResolvedConfig, logger: Logger, ok: boolean, detail
             detail: { remote: config.remote, ...detail },
         })
     } catch (e) {
-        logger.debug('审计日志写入失败：', e instanceof Error ? e.message : String(e))
+        // 审计写入失败不应中断部署，但用户已显式启用审计，需 warn 提示而非静默
+        logger.warn('⚠ 审计日志写入失败：' + (e instanceof Error ? e.message : String(e)))
     }
 }
 
