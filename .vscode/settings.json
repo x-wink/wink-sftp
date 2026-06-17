@@ -1,9 +1,8 @@
 {
-    "editor.formatOnSave": false,
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "oxc.oxc-vscode",
     "editor.codeActionsOnSave": {
-        "source.fixAll": "explicit",
-        "source.organizeImports": "never"
+        "source.fixAll.oxc": "explicit"
     },
-    "eslint.enable": true,
-    "eslint.validate": ["vue", "javascript", "typescript", "javascriptreact", "typescriptreact"]
+    "oxc.enable": true
 }

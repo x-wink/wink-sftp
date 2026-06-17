@@ -1,223 +1,284 @@
-/* eslint-disable no-console */
-import { Client } from 'ssh2';
-import path from 'node:path';
-import fs from 'node:fs';
-const client = new Client();
-const resolvePath = (...paths: string[]) => path.resolve(...[process.cwd(), ...paths]);
-const linuxPath = (...paths: string[]) => path.join(...paths).replaceAll(path.sep, '/');
-const exec = (command: string, debug = false) => {
-    return new Promise<string[]>((resolve, reject) => {
-        client.exec(command, (err, stream) => {
-            if (err) {
-                reject(err);
-            } else {
-                const data = [] as string[],
-                    error = [] as string[];
-                stream
-                    .on('exit', (code: number, signal: string) => {
-                        debug && console.info(`命令执行结束：${command}，退出码为：${code}，信号为：${signal}`);
-                        if (code !== 0 || error.length) {
-                            reject(error);
-                        } else {
-                            resolve(data);
-                        }
-                    })
-                    .on('data', (buffer: ArrayBuffer) => {
-                        const str = String(buffer);
-                        debug && console.info('标准输出', str);
-                        data.push(str);
-                    })
-                    .stderr.on('data', (buffer: ArrayBuffer) => {
-                        const str = String(buffer);
-                        debug && console.info('错误输出', str);
-                        error.push(str);
-                    });
-            }
-        });
-    });
-};
-const scan = (dir: string, ignoreHidden: boolean, excludes: string[] = [], parent = '') => {
-    const res = { dirs: [] as string[], files: [] as string[] };
-    dir = path.resolve(parent, dir);
-    if (excludes.includes(dir)) {
-        console.info('已忽略：' + dir);
-    } else {
-        if (fs.existsSync(dir)) {
-            if (fs.statSync(dir).isDirectory()) {
-                if (ignoreHidden && dir.split(path.sep).some((name) => name.indexOf('.') !== -1)) {
-                    console.info('忽略隐藏文件夹：' + dir);
-                } else {
-                    res.dirs.push(dir);
-                    const temp = fs.readdirSync(dir).flatMap((item) => scan(item, ignoreHidden, excludes, dir));
-                    res.files.push(...temp.flatMap((item) => item.files));
-                    res.dirs.push(...temp.flatMap((item) => item.dirs));
-                }
-            } else {
-                res.files.push(dir);
-            }
-        } else {
-            console.warn('目录或者文件不存在：' + dir);
-        }
-    }
-    return res;
-};
+import { Client } from 'ssh2'
+import type { ConnectConfig, SFTPWrapper } from 'ssh2'
+import fs from 'node:fs'
+import { scan } from './scanner'
+import { resolveLocal, remoteIsDir, buildRemoteTarget, buildRemoteDir } from './pathmap'
+import { execCommand, shellQuote } from './exec'
+import { Logger } from './logger'
+import { ConfigError, ConnectionError, TransferError } from './errors'
+
 export interface SftpOption {
-    excludes?: string[];
-    flat?: boolean;
-    clear?: boolean;
-    override?: boolean;
-    debug?: boolean;
-    mode?: number;
-    ignoreHidden?: boolean;
-    beforeRunCommand?: string;
-    afterRunCommand?: string;
+    excludes?: string[]
+    flat?: boolean
+    clear?: boolean
+    override?: boolean
+    debug?: boolean
+    mode?: number
+    ignoreHidden?: boolean
+    beforeRunCommand?: string
+    afterRunCommand?: string
 }
-const sftp = (local: string, remote: string, options?: SftpOption) => {
-    let { excludes = [] } = options ?? {};
-    const {
-        flat = false,
-        clear = false,
-        override = false,
-        debug = false,
-        mode = 0o777,
-        ignoreHidden = true,
-        beforeRunCommand,
-        afterRunCommand,
-    } = options ?? {};
-    excludes = excludes.map((item) => resolvePath(local, item));
-    local = resolvePath(local);
-    return new Promise<void>((resolve, reject) => {
-        client.sftp(async (err, sftp) => {
-            if (err) {
-                console.error(`SFTP开启失败：${local} => ${remote}`);
-                reject(err);
-            } else {
-                debug && console.info(`SFTP开启成功：${local} => ${remote}`);
-                debug && console.info('开始扫描待传输文件列表');
-                const { dirs, files } = scan(local, ignoreHidden, excludes);
-                debug && console.info('待传输文件数：' + files.length);
-                beforeRunCommand && (await exec(beforeRunCommand));
-                // 如果本地文件超过一个、本地文件只有一个而且有后缀但是远程路径没有后缀，则把远程路径当做目录
-                const remoteIsDir = files.length > 1 || (path.extname(files[0]) && !path.extname(remote));
-                if (remoteIsDir && clear) {
-                    await exec(`rm -rf ${remote}/*`);
-                    debug && console.info('已清空远程文件夹');
-                }
-                if (!flat) {
-                    debug && console.info('待创建文件夹数：' + dirs.length);
-                    await Promise.all(
-                        dirs.map(async (item) => {
-                            item = linuxPath(remote, path.relative(local, item));
-                            debug && console.info(`创建文件夹：${item}`);
-                            await exec(`mkdir -p ${item}`);
-                            debug && console.info(`创建成功：${item}`);
-                        })
-                    );
-                }
-                await Promise.all(
-                    files.map(async (file) => {
-                        let target = remote;
-                        if (remoteIsDir) {
-                            if (flat) {
-                                target = `${target}/${path.basename(file)}`;
-                            } else {
-                                target = linuxPath(target, path.relative(local, file));
-                            }
-                        }
-                        return new Promise<void>((resolve, reject) => {
-                            debug && console.info(`开始传输：${file} => ${target}`);
-                            const translate = () => {
-                                sftp.fastPut(file, target, { mode }, (err) => {
-                                    if (err) {
-                                        reject(err);
-                                        console.error(`传输失败：${file} => ${target}`);
-                                    } else {
-                                        debug && console.info(`传输成功：${file} => ${target}`);
-                                        resolve();
-                                    }
-                                });
-                            };
-                            exec(`stat ${target}`)
-                                .then(() => {
-                                    if (override) {
-                                        translate();
-                                    } else {
-                                        debug && console.info('文件已存在：' + target);
-                                        resolve();
-                                    }
-                                })
-                                .catch(translate);
-                        });
-                    })
-                );
-                afterRunCommand && (await exec(afterRunCommand));
-                resolve();
-            }
-        });
-    });
-};
+
 export interface RunOption {
-    connect?: Parameters<typeof client.connect>[0];
-    local?: string;
-    remote?: string;
-    sftpOptions?: SftpOption;
-    debug?: boolean;
-    config?: string | false;
+    connect?: ConnectConfig
+    local?: string
+    remote?: string
+    sftpOptions?: SftpOption
+    debug?: boolean
+    config?: string | false
+    /** JSON 模式：结果走 stdout。 */
+    json?: boolean
+    /** 预演：打印将执行的动作但不落地（不建立连接）。 */
+    dryRun?: boolean
 }
-type ResolvedConfig = {
-    [k in keyof Omit<RunOption, 'config'>]-?: RunOption[k];
-};
-const resolveConfig = (options: RunOption = {}) => {
-    const { config = false } = options;
-    let res = options as ResolvedConfig;
+
+interface ResolvedConfig {
+    connect: ConnectConfig
+    local: string
+    remote: string
+    sftpOptions: SftpOption
+    debug: boolean
+    json: boolean
+    dryRun: boolean
+}
+
+/** 部署结果：结构化，供 CLI 渲染与定退出码、供 agent 解析。 */
+export interface DeployResult {
+    /** 是否全部成功（无失败文件）。 */
+    ok: boolean
+    /** 是否为预演。 */
+    dryRun: boolean
+    /** 本地根目录（绝对路径）。 */
+    local: string
+    /** 远程根路径。 */
+    remote: string
+    /** 已传输（或预演将传输）的远程目标。 */
+    transferred: string[]
+    /** 已跳过（已存在且未开启 override）的远程目标。 */
+    skipped: string[]
+    /** 传输失败的目标及原因。 */
+    failed: { target: string; error: string }[]
+    /** 已创建（或预演将创建）的远程目录。 */
+    dirs: string[]
+    /** 已执行（或预演将执行）的远程命令。 */
+    commands: string[]
+}
+
+const DEFAULT_MODE = 0o777
+
+/** 合并配置文件 / CLI 选项并校验，返回归一化配置。校验失败抛 {@link ConfigError}。 */
+const resolveConfig = (options: RunOption = {}): ResolvedConfig => {
+    const { config = false } = options
+    // json / dryRun / debug 是调用级开关，即便用 -c 配置文件也应生效（叠加在文件之上）。
+    const cliDebug = options.debug ?? false
+    const cliJson = options.json ?? false
+    const cliDryRun = options.dryRun ?? false
+    let raw: RunOption = options
     if (config) {
         try {
-            res = JSON.parse(String(fs.readFileSync(resolvePath(config)))) as ResolvedConfig;
-            res.sftpOptions ??= {};
-            res.sftpOptions.debug ??= res.debug;
+            raw = JSON.parse(String(fs.readFileSync(resolveLocal(config)))) as RunOption
         } catch (e) {
-            console.error('解析配置文件失败', e);
+            throw new ConfigError(`解析配置文件失败：${config}`, { cause: e })
         }
     }
-    // TODO 支持秘钥登录
-    if (
-        !res.connect?.host ||
-        !res.connect?.port ||
-        !res.connect?.username ||
-        !res.connect?.password ||
-        !res.local ||
-        !res.remote
-    ) {
-        throw new Error(
+    const connect = raw.connect ?? {}
+    if (!connect.host || !connect.port || !connect.username || !connect.password || !raw.local || !raw.remote) {
+        throw new ConfigError(
             '配置至少包含以下属性：connect.host、connect.port、connect.username、connect.password、local、remote'
-        );
+        )
     }
-    return res;
-};
-export const run = (options?: RunOption) => {
-    const config = resolveConfig(options);
-    const { connect, local, remote, sftpOptions, debug } = config;
-    debug && console.info(config);
-    client
-        .on('ready', async () => {
-            debug && console.info('连接成功');
+    const debug = raw.debug ?? cliDebug
+    const sftpOptions: SftpOption = { ...raw.sftpOptions }
+    sftpOptions.debug ??= debug
+    return {
+        connect,
+        local: raw.local,
+        remote: raw.remote,
+        sftpOptions,
+        debug,
+        json: (raw.json ?? false) || cliJson,
+        dryRun: (raw.dryRun ?? false) || cliDryRun,
+    }
+}
+
+/** 校验 clear 目标路径安全：非空、非 `/`、至少含一个有效路径段。 */
+const assertSafeClearTarget = (remote: string): void => {
+    const trimmed = remote.trim()
+    const segments = trimmed
+        .replace(/\/+$/, '')
+        .split('/')
+        .filter((s) => s && s !== '.')
+    if (!trimmed || trimmed === '/' || segments.length === 0) {
+        throw new ConfigError(`clear 目标路径不安全，拒绝清空：${JSON.stringify(remote)}`)
+    }
+}
+
+const openSftp = (client: Client): Promise<SFTPWrapper> =>
+    new Promise((resolve, reject) => {
+        client.sftp((err, sftp) => (err ? reject(new ConnectionError('SFTP 开启失败', { cause: err })) : resolve(sftp)))
+    })
+
+/** 远程文件是否存在（用 `stat`，不抛错，仅返回布尔）。 */
+const remoteExists = async (client: Client, target: string): Promise<boolean> => {
+    try {
+        await execCommand(client, `stat ${shellQuote(target)}`)
+        return true
+    } catch {
+        return false
+    }
+}
+
+const fastPut = (sftp: SFTPWrapper, file: string, target: string, mode: number): Promise<void> =>
+    new Promise((resolve, reject) => {
+        sftp.fastPut(file, target, { mode }, (err) =>
+            err ? reject(new TransferError(`传输失败：${file} => ${target}`, { cause: err })) : resolve()
+        )
+    })
+
+/** 计算扫描结果与基础映射（dry-run 与实跑共用）。 */
+const computePlan = (config: ResolvedConfig) => {
+    const local = resolveLocal(config.local)
+    const { remote, sftpOptions: opts } = config
+    const excludes = (opts.excludes ?? []).map((item) => resolveLocal(config.local, item))
+    const { dirs, files } = scan(local, { ignoreHidden: opts.ignoreHidden ?? true, excludes })
+    const isDir = remoteIsDir(files, remote)
+    const flat = opts.flat ?? false
+    const remoteDirs = flat ? [] : dirs.map((dir) => buildRemoteDir(dir, local, remote))
+    const targets = files.map((file) => ({
+        file,
+        target: buildRemoteTarget(file, { local, remote, remoteIsDir: isDir, flat }),
+    }))
+    return { local, remote, opts, isDir, remoteDirs, targets }
+}
+
+/** 预演：仅本地计算将执行的动作，不建立连接、不落地。 */
+const planDeploy = (config: ResolvedConfig): DeployResult => {
+    const { local, remote, opts, isDir, remoteDirs, targets } = computePlan(config)
+    const commands: string[] = []
+    if (opts.beforeRunCommand) commands.push(opts.beforeRunCommand)
+    if (isDir && opts.clear) {
+        assertSafeClearTarget(remote)
+        commands.push(`rm -rf ${shellQuote(remote)}/*`)
+    }
+    if (opts.afterRunCommand) commands.push(opts.afterRunCommand)
+    return {
+        ok: true,
+        dryRun: true,
+        local,
+        remote,
+        transferred: targets.map((t) => t.target),
+        skipped: [],
+        failed: [],
+        dirs: remoteDirs,
+        commands,
+    }
+}
+
+/** 实跑部署：建目录、传文件、跑前后命令，返回结构化结果。 */
+const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): Promise<DeployResult> => {
+    const sftp = await openSftp(client)
+    const { local, remote, opts, isDir, remoteDirs, targets } = computePlan(config)
+    logger.debug('待传输文件数：' + targets.length)
+
+    const commands: string[] = []
+    const mode = opts.mode ?? DEFAULT_MODE
+
+    if (opts.beforeRunCommand) {
+        logger.debug('执行前置命令：' + opts.beforeRunCommand)
+        await execCommand(client, opts.beforeRunCommand)
+        commands.push(opts.beforeRunCommand)
+    }
+
+    if (isDir && opts.clear) {
+        assertSafeClearTarget(remote)
+        const cmd = `rm -rf ${shellQuote(remote)}/*`
+        await execCommand(client, cmd)
+        commands.push(cmd)
+        logger.debug('已清空远程文件夹：' + remote)
+    }
+
+    for (const dir of remoteDirs) {
+        // 顺序建目录，避免一次性打满 SSH MaxSessions；并发池在 Phase 2 引入
+        // oxlint-disable-next-line no-await-in-loop
+        await execCommand(client, `mkdir -p ${shellQuote(dir)}`)
+        logger.debug('创建文件夹：' + dir)
+    }
+
+    const transferred: string[] = []
+    const skipped: string[] = []
+    const failed: DeployResult['failed'] = []
+    await Promise.all(
+        targets.map(async ({ file, target }) => {
             try {
-                await sftp(local, remote, sftpOptions);
-                console.info('文件传输完成');
+                if (!opts.override && (await remoteExists(client, target))) {
+                    logger.debug('文件已存在，跳过：' + target)
+                    skipped.push(target)
+                    return
+                }
+                logger.debug(`开始传输：${file} => ${target}`)
+                await fastPut(sftp, file, target, mode)
+                transferred.push(target)
             } catch (e) {
-                console.error('执行异常', e);
+                failed.push({ target, error: e instanceof Error ? e.message : String(e) })
             }
-            client.end();
-            client.destroy();
         })
-        .on('error', (err) => {
-            debug && console.info('发生异常：', err);
-        })
-        .on('timeout', () => {
-            debug && console.info('会话超时');
-        })
-        .on('close', () => {
-            debug && console.info('连接关闭');
-        })
-        .connect(connect);
-};
+    )
+
+    if (opts.afterRunCommand) {
+        logger.debug('执行后置命令：' + opts.afterRunCommand)
+        await execCommand(client, opts.afterRunCommand)
+        commands.push(opts.afterRunCommand)
+    }
+
+    return {
+        ok: failed.length === 0,
+        dryRun: false,
+        local,
+        remote,
+        transferred,
+        skipped,
+        failed,
+        dirs: remoteDirs,
+        commands,
+    }
+}
+
+const connectAndDeploy = (config: ResolvedConfig, logger: Logger): Promise<DeployResult> =>
+    new Promise((resolve, reject) => {
+        const client = new Client()
+        let settled = false
+        const finish = (fn: () => void) => {
+            if (!settled) {
+                settled = true
+                fn()
+            }
+        }
+        client
+            .on('ready', async () => {
+                logger.debug('连接成功')
+                try {
+                    const result = await deploy(client, config, logger)
+                    finish(() => resolve(result))
+                } catch (e) {
+                    finish(() => reject(e))
+                } finally {
+                    client.end()
+                }
+            })
+            .on('error', (err) => finish(() => reject(new ConnectionError('SSH 连接失败', { cause: err }))))
+            .on('timeout', () => finish(() => reject(new ConnectionError('SSH 会话超时'))))
+            .connect(config.connect)
+    })
+
+/**
+ * 入口：解析配置后执行部署或预演。
+ *
+ * 成功 resolve {@link DeployResult}（含 `ok`，部分文件失败时 `ok=false`）；
+ * 配置/连接/远程命令错误时 reject 类型化错误。退出码由 CLI 层据此决定。
+ */
+export const run = (options?: RunOption): Promise<DeployResult> => {
+    const config = resolveConfig(options)
+    const logger = new Logger({ debug: config.debug, json: config.json })
+    logger.debug('解析后的配置：', config)
+    return config.dryRun ? Promise.resolve(planDeploy(config)) : connectAndDeploy(config, logger)
+}

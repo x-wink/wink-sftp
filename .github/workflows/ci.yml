@@ -1,0 +1,96 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
+
+jobs:
+    check:
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                # 开发工具链（vitest 4 / TS 6）需 Node 20+
+                node-version: [20, 22, 24]
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v4
+
+            - name: Setup Node.js ${{ matrix.node-version }}
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ matrix.node-version }}
+                  cache: pnpm
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Lint
+              run: pnpm run lint:check
+
+            - name: Format check
+              run: pnpm run format:check
+
+            - name: Typecheck
+              run: pnpm run typecheck
+
+            - name: Test
+              run: pnpm test
+
+            - name: Build
+              run: pnpm run build
+
+    # 事后校验提交信息符合 Conventional Commits（CHANGELOG / release 依赖）
+    commitlint:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: pnpm
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Validate PR commits
+              if: github.event_name == 'pull_request'
+              run: pnpm exec commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+
+            - name: Validate pushed commit
+              if: github.event_name == 'push'
+              run: git log -1 --pretty=%B | pnpm exec commitlint --verbose
+
+    # 验证发布产物在 engines 声明的 Node 18 下限上可执行
+    runtime-floor:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v4
+
+            - name: Setup Node.js 18
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 18
+                  cache: pnpm
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+
+            - name: Build
+              run: pnpm run build
+
+            - name: Smoke test bundled CLI
+              run: node dist/index.js --help

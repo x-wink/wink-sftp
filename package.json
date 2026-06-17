@@ -1,84 +1,75 @@
 {
     "name": "@xwink/sftp",
-    "version": "1.0.4",
+    "version": "1.1.0",
+    "private": false,
     "description": "远程部署SFTP工具",
     "keywords": [
-        "ssh",
-        "sftp",
+        "command",
         "remote publish",
-        "command"
+        "sftp",
+        "ssh"
     ],
+    "license": "MIT",
     "author": {
         "name": "XWINK",
         "email": "1041367524@qq.com",
         "url": "https://github.com/x-wink"
     },
-    "license": "MIT",
     "repository": {
         "url": "https://github.com/x-wink/wink-sftp"
     },
-    "private": false,
+    "bin": {
+        "wink-sftp": "dist/index.js"
+    },
     "files": [
         "dist/src/*.d.ts",
         "dist/index.js"
     ],
     "main": "dist/index.js",
-    "bin": {
-        "wink-sftp": "dist/index.js"
-    },
     "types": "dist/src/index.d.ts",
-    "browser": "dist/index.js",
     "exports": {
         ".": {
-            "types": "./types/index.d.ts",
+            "types": "./dist/src/index.d.ts",
             "import": "./dist/index.js",
             "require": "./dist/index.js"
         }
     },
+    "publishConfig": {
+        "access": "public"
+    },
     "scripts": {
-        "dev": "ts-node src/index.ts -c sftp.json",
-        "build": "set NODE_OPTIONS=--openssl-legacy-provider && tsc -emitDeclarationOnly && ncc build ./src/index.ts -o ./dist",
-        "build:rollup": "tsc && rollup --bundleConfigAsCjs --config dist/rollup.config.js",
-        "version": "conventional-changelog -p angular -i CHANGELOG.md -s && git add CHANGELOG.md",
-        "release": "pnpm run build && bumpp package.json --commit \"release: v%s\" --push --all --tag && pnpm publish --access public",
-        "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --ignore-path .gitignore",
-        "prettier": "prettier --write ./**/*.{vue,ts,tsx,js,jsx,css,less,json,md,html}",
-        "prepare": "husky install"
-    },
-    "devDependencies": {
-        "@babel/core": "^7.22.1",
-        "@commitlint/cli": "^18.4.1",
-        "@commitlint/config-conventional": "^18.4.0",
-        "@rollup/plugin-babel": "^6.0.3",
-        "@rollup/plugin-commonjs": "^25.0.0",
-        "@rollup/plugin-json": "^6.0.0",
-        "@rollup/plugin-node-resolve": "^15.0.2",
-        "@rollup/plugin-typescript": "^11.1.1",
-        "@types/node": "^20.2.3",
-        "@types/ssh2": "^1.11.11",
-        "@vercel/ncc": "^0.36.1",
-        "@xwink/eslint-config": "1.1.1",
-        "bumpp": "^9.2.0",
-        "conventional-changelog-cli": "^4.1.0",
-        "eslint": "^8.53.0",
-        "husky": "^8.0.3",
-        "less": "^4.2.0",
-        "lint-staged": "^15.1.0",
-        "prettier": "^3.1.0",
-        "rollup": "^3.23.0",
-        "ts-node": "^10.9.1",
-        "typescript": "~5.2.2"
-    },
-    "lint-staged": {
-        "*.{js,jsx,ts,tsx,vue}": [
-            "npm run lint"
-        ],
-        "*.{vue,ts,tsx,js,jsx,css,less,json,md,html}": [
-            "npm run prettier"
-        ]
+        "dev": "tsx src/index.ts -c sftp.json",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "typecheck": "tsc --noEmit",
+        "build": "tsc -emitDeclarationOnly && ncc build ./src/index.ts -o ./dist",
+        "changelog": "changelogen --output CHANGELOG.md",
+        "release": "pnpm run build && changelogen --release --push",
+        "lint": "oxlint --fix",
+        "lint:check": "oxlint",
+        "format": "oxfmt .",
+        "format:check": "oxfmt --check ."
     },
     "dependencies": {
-        "commander": "^10.0.1",
-        "ssh2": "^1.13.0"
-    }
+        "commander": "^15.0.0",
+        "ssh2": "^1.17.0"
+    },
+    "devDependencies": {
+        "@commitlint/cli": "^21.0.2",
+        "@commitlint/config-conventional": "^21.0.2",
+        "@types/node": "^25.9.3",
+        "@types/ssh2": "^1.15.5",
+        "@vercel/ncc": "^0.44.0",
+        "changelogen": "^0.6.2",
+        "oxfmt": "^0.55.0",
+        "oxlint": "^1.70.0",
+        "tsx": "^4.22.4",
+        "typescript": "^6.0.3",
+        "vite": "^8.0.16",
+        "vitest": "^4.1.9"
+    },
+    "engines": {
+        "node": ">=18"
+    },
+    "packageManager": "pnpm@11.6.0"
 }

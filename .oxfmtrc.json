@@ -1,16 +1,15 @@
 {
+    "$schema": "./node_modules/oxfmt/configuration_schema.json",
     "printWidth": 120,
     "tabWidth": 4,
     "useTabs": false,
-    "semi": true,
+    "semi": false,
     "singleQuote": true,
     "quoteProps": "as-needed",
-    "jsxSingleQuote": false,
     "trailingComma": "es5",
     "bracketSpacing": true,
-    "bracketSameLine": false,
     "arrowParens": "always",
-    "htmlWhitespaceSensitivity": "ignore",
-    "vueIndentScriptAndStyle": true,
-    "endOfLine": "auto"
+    "endOfLine": "lf",
+    "sortPackageJson": false,
+    "ignorePatterns": ["dist", "CHANGELOG.md"]
 }

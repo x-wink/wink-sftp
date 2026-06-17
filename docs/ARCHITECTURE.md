@@ -23,22 +23,28 @@
 
 ## 三、技术栈
 
-| 技术 | 角色 |
-| --- | --- |
-| **TypeScript 5.x**（`strict`、`noUncheckedIndexedAccess`） | 全栈语言 |
-| **ssh2** | 底层 SSH/SFTP 连接与远程 `exec` |
-| **ssh2-sftp-client** | 上层 SFTP 传输封装（exists / mkdir / fastPut / fastGet） |
-| **commander** | 子命令体系 CLI |
-| **zod** | 配置 / inventory / stack schema 校验、类型推导、JSON-Schema 生成（单一事实源） |
-| **js-yaml** | YAML 解析（与 JSON 双格式，统一交 zod 校验） |
-| **vitest** + **ssh2 内置 `Server`** | 测试；进程内起 SFTP server，免 Docker |
-| **p-limit / p-queue + p-retry** | 并发池 + 重试 |
-| **consola** + **picocolors** | 分级日志（人类输出走 stderr）+ 终端着色 |
-| **ink** | 监控仪表盘 TUI |
-| **node-cron / 原生 `setInterval`** | 轮询调度 |
-| **原生异步迭代器** | 流式输出（`for await`） |
+| 技术                                                            | 角色                                                                                |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| **TypeScript 6.x**（`strict`、目标 `noUncheckedIndexedAccess`） | 全栈语言                                                                            |
+| **ssh2**                                                        | 底层 SSH/SFTP 连接与远程 `exec`                                                     |
+| **ssh2-sftp-client**                                            | 上层 SFTP 传输封装（exists / mkdir / fastPut / fastGet）                            |
+| **commander**                                                   | 子命令体系 CLI                                                                      |
+| **zod**                                                         | 配置 / inventory / stack schema 校验、类型推导、JSON-Schema 生成（单一事实源）      |
+| **js-yaml**                                                     | YAML 解析（与 JSON 双格式，统一交 zod 校验）                                        |
+| **vitest** + **ssh2 内置 `Server`**                             | 测试；进程内起 SFTP server，免 Docker                                               |
+| **p-limit / p-queue + p-retry**                                 | 并发池 + 重试                                                                       |
+| **consola** + **picocolors**                                    | 分级日志（人类输出走 stderr）+ 终端着色                                             |
+| **ink**                                                         | 监控仪表盘 TUI                                                                      |
+| **node-cron / 原生 `setInterval`**                              | 轮询调度                                                                            |
+| **原生异步迭代器**                                              | 流式输出（`for await`）                                                             |
+| **pnpm**                                                        | 包管理器（`node-linker=hoisted`，利于 ncc 解析 ssh2 原生件）                        |
+| **oxlint + oxfmt**                                              | 静态检查 + 代码格式化（取代 eslint/prettier）                                       |
+| **tsx**                                                         | 开发期直接运行 TS（取代 ts-node）                                                   |
+| **changelogen**                                                 | 版本递增 + CHANGELOG 生成 + GitHub Release（取代 conventional-changelog-cli/bumpp） |
 
-**构建与产物**：CLI 二进制用 ncc 打单文件（原生 addon 友好）；库入口用 tsc 产出 JS + d.ts、ssh2 作普通依赖（bin 打包、lib 不打包），不使用 Babel。`package.json` 的 `main`/`types`/`exports` 指向 tsc 产物、`bin` 指向 ncc 产物、不设 `browser` 字段。`engines.node >= 18`。
+**构建与产物**：CLI 二进制用 ncc 打单文件（原生 addon 友好）；库入口用 tsc 产出 JS + d.ts、ssh2 作普通依赖（bin 打包、lib 不打包），不使用 Babel。`package.json` 的 `main`/`types`/`exports` 指向 tsc 产物、`bin` 指向 ncc 产物、不设 `browser` 字段。`engines.node >= 18`。**发布**由推送 `v*` tag 触发 GitHub Actions：跑门禁后 `npm publish` 经 **OIDC 可信发布**（无 token，自动生成 provenance 供应链溯源；需先在 npmjs.com 配置可信发布者，仓库须公开）。
+
+**为何不用 rollup/vite 打包**：二者基于 rollup，对 ssh2 的原生组件（`cpufeatures.node`）解析易失败（项目早期 rollup 路径正因此报错）；ncc 对原生 addon 友好、自动拷贝原生资产，产出真正自包含的单文件 CLI。vite 仅作为 vitest 的测试基建存在，不用于生产打包。
 
 **关键取舍（含原因）**：
 
@@ -112,17 +118,17 @@ src/
 
 ## 七、命令面
 
-| 子命令 | 读/写 | 说明 |
-| --- | --- | --- |
-| `provision` | 写 | 按 stack 定义收敛服务器栈（装配/配置/维护标准组件） |
-| `deploy` / `push` | 写 | 部署 / 上传（无子命令时默认 `deploy`，向后兼容） |
-| `pull` / `get` | 写 | 下载（fastGet） |
-| `ls` / `browse` | 读 | 远程文件浏览 |
-| `exec` | 读/写 | 远程执行（run / stream） |
-| `status` | 读 | 资源/健康快照 |
-| `logs` | 读 | 日志流式 tail + grep |
-| `ps` / `service` | 写 | 进程/服务管理 |
-| `edit` | 写 | 守护式远程配置编辑 |
+| 子命令            | 读/写 | 说明                                                |
+| ----------------- | ----- | --------------------------------------------------- |
+| `provision`       | 写    | 按 stack 定义收敛服务器栈（装配/配置/维护标准组件） |
+| `deploy` / `push` | 写    | 部署 / 上传（无子命令时默认 `deploy`，向后兼容）    |
+| `pull` / `get`    | 写    | 下载（fastGet）                                     |
+| `ls` / `browse`   | 读    | 远程文件浏览                                        |
+| `exec`            | 读/写 | 远程执行（run / stream）                            |
+| `status`          | 读    | 资源/健康快照                                       |
+| `logs`            | 读    | 日志流式 tail + grep                                |
+| `ps` / `service`  | 写    | 进程/服务管理                                       |
+| `edit`            | 写    | 守护式远程配置编辑                                  |
 
 **输出纪律**：`--json` 机器输出只走 **stdout**；人类日志/进度/debug 走 **stderr**。保证 `wink-sftp ... --json | jq` 成立，也是 agent 可靠解析的基础。
 
@@ -144,11 +150,11 @@ provision 坐在 `SshSession` + `exec` + 守护式变更原语之上的一层 **
 
 ```ts
 interface Recipe {
-  detect(session): InstalledState        // 已装？版本？—— 幂等前提
-  install(session, spec): Result         // 收敛到目标版本
-  configure(session, spec): Result       // 复用守护式变更：备份→校验→原子→reload→回滚
-  verify(session): Health                // nginx -t / redis ping / mysqladmin ping
-  // maintain（升级/备份/重启）：复用 guard + service
+    detect(session): InstalledState // 已装？版本？—— 幂等前提
+    install(session, spec): Result // 收敛到目标版本
+    configure(session, spec): Result // 复用守护式变更：备份→校验→原子→reload→回滚
+    verify(session): Health // nginx -t / redis ping / mysqladmin ping
+    // maintain（升级/备份/重启）：复用 guard + service
 }
 ```
 
@@ -156,13 +162,13 @@ interface Recipe {
 
 ```yaml
 stack:
-  nodejs: "20"                              # 版本管理器（nvm）
-  jdk: "17"                                 # sdkman
-  python: "3.11"                            # pyenv
-  nginx: latest                             # 官方源 + 守护式配置
-  docker: true                              # 官方安装脚本
-  redis: { version: 7, mode: docker, maxmemory: 512mb }
-  mysql: { version: 8, mode: native, rootPassword: "${MYSQL_ROOT_PWD}" }  # mode: docker|native
+    nodejs: '20' # 版本管理器（nvm）
+    jdk: '17' # sdkman
+    python: '3.11' # pyenv
+    nginx: latest # 官方源 + 守护式配置
+    docker: true # 官方安装脚本
+    redis: { version: 7, mode: docker, maxmemory: 512mb }
+    mysql: { version: 8, mode: native, rootPassword: '${MYSQL_ROOT_PWD}' } # mode: docker|native
 ```
 
 `wink-sftp provision --stack prod` 将服务器**收敛**到此状态；`--dry-run` 出 diff，`--yes` 才执行。
@@ -178,13 +184,13 @@ stack:
 
 ## 十、阶段与架构落地映射
 
-| 阶段 | 架构落地重点 |
-| --- | --- |
+| 阶段            | 架构落地重点                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------ |
 | Phase 1（v1.1） | 抽出 `scanner` / `pathmap` / `exec` 纯模块 + 类化；护栏 / 转义 / 退出码 / `--json` / `--dry-run`；vitest 骨架 + CI |
-| Phase 2（v1.2） | `SshSession` 成形、流式 `exec`、并发池、密钥登录、`audit`、测试覆盖完善、deploy Skill |
-| Phase 3（v1.3） | `transfer` 支持下载、`ls`；增量、JSON+YAML、多环境、secrets |
-| Phase 4（v2.0） | `guard` 守护式变更原语、多机（主机数组）、文件级回滚、`SshSession` 编程式 API |
-| Phase 5（v3.0） | 单机 provision（recipes + stack 定义）+ 只读运维原语（status/logs/ps）+ `edit` |
-| Phase 6（v4.0） | inventory + 多机批量 + monitor/`model` + ink TUI + daemon + notifier |
+| Phase 2（v1.2） | `SshSession` 成形、流式 `exec`、并发池、密钥登录、`audit`、测试覆盖完善、deploy Skill                              |
+| Phase 3（v1.3） | `transfer` 支持下载、`ls`；增量、JSON+YAML、多环境、secrets                                                        |
+| Phase 4（v2.0） | `guard` 守护式变更原语、多机（主机数组）、文件级回滚、`SshSession` 编程式 API                                      |
+| Phase 5（v3.0） | 单机 provision（recipes + stack 定义）+ 只读运维原语（status/logs/ps）+ `edit`                                     |
+| Phase 6（v4.0） | inventory + 多机批量 + monitor/`model` + ink TUI + daemon + notifier                                               |
 
 **实现次序**：Phase 1 先抽出 `scanner` / `pathmap` / `exec` 三个纯模块并类化、配齐测试，使核心可测；`SshSession` 在 Phase 2 成形；`guard` 在 Phase 4 成形，供 `edit` / provision / 回滚复用。

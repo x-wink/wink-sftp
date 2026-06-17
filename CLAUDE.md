@@ -10,57 +10,64 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Planning docs
 
-- `ROADMAP.md` — phased iteration plan (v1.1 止血 → v2.0 编排 → v3.0 运维支柱) and the locked product decisions.
-- `ARCHITECTURE.md` — target tech stack, layered architecture, the guarded-mutation safety mainline, and the command surface. Consult before structural changes.
+- `docs/ROADMAP.md` — phased iteration plan (v1.1 止血 → v2.0 编排 → v3.0 运维支柱) and the locked product decisions.
+- `docs/ARCHITECTURE.md` — target tech stack, layered architecture, the guarded-mutation safety mainline, and the command surface. Consult before structural changes.
 
 Long-term vision: evolve from a one-shot deploy CLI into an agentless "SSH 快捷操作入口" for solo devs and AI agents, covering a standard-stack server's full lifecycle — provision (install/configure nginx/redis/mysql/docker/node/jdk/python via curated recipes) → deploy → status/logs → edit/service. Current code is still the MVP described below.
 
 ## Overview
 
-`@xwink/sftp` (`wink-sftp`) is a CLI tool that deploys local files to a remote server over SFTP. It is published to npm and exposes a single `wink-sftp` binary. The codebase is two TypeScript files; all logic lives in `src/core.ts`, and `src/index.ts` is only the Commander argument layer.
+`@xwink/sftp` (`wink-sftp`) is a CLI that deploys a local directory to a remote server over SFTP, with optional before/after remote commands. Published to npm as a single `wink-sftp` binary (ncc bundle).
+
+Source is modular under `src/`:
+
+- `index.ts` — Commander CLI layer: flags → config, renders the result (human or `--json`), sets the process exit code.
+- `core.ts` — orchestration: `resolveConfig`, `planDeploy` (dry-run), `deploy`, `run`; returns a structured `DeployResult`.
+- `scanner.ts` — pure local FS scan.
+- `pathmap.ts` — pure path helpers (`resolveLocal` / `linuxPath` / `remoteIsDir` / `buildRemoteTarget` / `buildRemoteDir`).
+- `exec.ts` — `shellQuote` (POSIX escaping) + `execCommand` (structured result).
+- `logger.ts` — leveled logging (human → stderr, `--json` → stdout) + `redact` (secret masking).
+- `errors.ts` — typed errors carrying exit codes.
+
+Unit tests live in `test/` (vitest), covering the pure modules.
 
 ## Commands
 
 ```bash
-# Run locally against a config file (uses ts-node, no build)
-npm run dev                  # == ts-node src/index.ts -c sftp.json
-
-# Lint (auto-fix) and format
-npm run lint
-npm run prettier
-
-# Build the publishable bundle into dist/ (ncc-based, single index.js)
-npm run build
-
-# Release: build + bump version + git tag/push + npm publish
-npm run release
+pnpm dev            # tsx src/index.ts -c sftp.json（无需构建）
+pnpm test           # vitest
+pnpm run typecheck  # tsc --noEmit
+pnpm run lint       # oxlint --fix（lint:check 不修复，用于 CI）
+pnpm run format     # oxfmt .（format:check 用于 CI）
+pnpm run build      # tsc -emitDeclarationOnly && ncc build → dist/
+pnpm run release    # build + changelogen --release --push（改版本/CHANGELOG/commit/tag/push）；发布与 GitHub Release 由 tag 触发 CI 完成
 ```
 
-There is no test suite. To exercise the tool manually, create an `sftp.json` (see README for the schema) and run `npm run dev`, or invoke the CLI directly: `ts-node src/index.ts -l ./dist -r /apps/myapp -h HOST -p 22 -u root -pwd PASS`.
-
-Note: `npm run build` sets `NODE_OPTIONS=--openssl-legacy-provider` using Windows `set` syntax — on macOS/Linux prefix the env var manually (`NODE_OPTIONS=--openssl-legacy-provider tsc -emitDeclarationOnly && ncc build ...`).
+仓库使用 **pnpm**（`.npmrc` 设 `node-linker=hoisted`，利于 ncc 打包 ssh2 原生件）。构建已不再需要 `--openssl-legacy-provider`。
 
 ## Architecture
 
-The full execution flow lives in `src/core.ts` and runs against a single module-level `ssh2` `Client` instance:
+`run(options)` 解析配置后，分两路：`--dry-run` 走 `planDeploy`（纯本地计算、不连接），否则新建一个**每次独立的** `ssh2.Client` 跑 `deploy`。两者都返回 `DeployResult { ok, dryRun, local, remote, transferred, skipped, failed[], dirs, commands }`，由 CLI 层渲染并据此定退出码。
 
-1. **`run(options)`** — entry point. Resolves config, opens the SSH connection, and wires up `ready`/`error`/`timeout`/`close` handlers. On `ready` it calls `sftp()` then tears the connection down.
-2. **`resolveConfig(options)`** — merges CLI options with an optional JSON config file (`-c`). When a config file is given it **replaces** CLI args entirely (the file wins). Validates that `connect.{host,port,username,password}`, `local`, and `remote` are all present, throwing otherwise. The top-level `debug` flag becomes the default for `sftpOptions.debug`.
-3. **`scan(dir, ignoreHidden, excludes)`** — recursively walks the local `local` directory, returning `{ dirs, files }` as absolute paths. Honors `excludes` (full-path match) and `ignoreHidden` (skips any path segment containing `.`).
-4. **`sftp(local, remote, options)`** — the transfer core. Scans files, runs `beforeRunCommand`, optionally clears the remote dir (`clear`), recreates the directory tree via remote `mkdir -p` (unless `flat`), then `fastPut`s each file. `override` controls whether existing remote files (detected with a remote `stat`) are overwritten. Finally runs `afterRunCommand`.
-5. **`exec(command, debug)`** — promisified `client.exec`; rejects on non-zero exit code or any stderr output. Used for all remote shell operations (`mkdir`, `rm`, `stat`, and the user's before/after commands).
+编辑时须注意：
 
-Key behaviors to keep in mind when editing:
-- **Remote-is-dir heuristic** (`remoteIsDir`): the remote path is treated as a directory if there are >1 files, or the single file has an extension while `remote` does not. This drives whether per-file target paths are built.
-- **Path handling**: local paths use `resolvePath` (relative to `process.cwd()`); remote paths must always be POSIX, built with `linuxPath` which forces `/` separators. Never use raw `path.join` for remote targets.
-- `clear` issues `rm -rf ${remote}/*` on the remote — destructive; guard any changes here carefully.
-- Key-based SSH auth is not yet supported (see the `TODO` in `resolveConfig`); only password auth works.
+- **`execCommand` 仅以退出码判失败**（stderr 非空 ≠ 失败），失败抛类型化 `RemoteCommandError`。
+- **所有拼入远程 shell 的路径/文件名必须经 `shellQuote`**（防注入），切勿裸插值。
+- **`clear`**（`rm -rf ${remote}/*`）由 `assertSafeClearTarget` 护栏校验（拒绝空路径 / `/`）。
+- **路径**：本地用 `resolveLocal`（相对 cwd）；远程一律 POSIX，用 `linuxPath` 构造，绝不用裸 `path.join`。`remoteIsDir` / `buildRemoteTarget` 为纯函数且对空列表安全。
+- **`ignoreHidden`** 只对相对 `local` 的路径段做 `startsWith('.')` 判定。
+- **退出码**：config 2 / connection 3 / remote-command 4 / transfer 5 / 通用 1。
+- 仅支持密码登录（密钥登录在路线图中）。
 
 ## CLI ↔ config mapping
 
-`src/index.ts` flattens Commander's flat options into the nested `RunOption`/`SftpOption` shape that `core.ts` expects (e.g. `--connect-host` → `connect.host`, `--sftp-flat` → `sftpOptions.flat`). When adding an option you must update both the Commander `.option(...)` declarations and this mapping object, plus the `SftpOption`/`RunOption` interfaces in `core.ts`.
+`src/index.ts` 把 Commander 的扁平选项映射成嵌套的 `RunOption`/`SftpOption`（`--connect-host` → `connect.host`，`--sftp-flat` → `sftpOptions.flat`）。`mode` 按八进制、`port` 按数值解析；`--json`/`--dry-run`/`--debug` 是调用级开关（叠加在 `-c` 配置文件之上）。新增选项时须同时更新：Commander 的 `.option(...)`、该映射对象、`core.ts` 的接口。
+
+> commander 15 不允许多字符短 flag：password / clear / before / after 均为长 flag（`--connect-password` / `--sftp-clear` / `--before-run-command` / `--after-run-command`）；`-h` 用作 host，帮助走 `--help`。
 
 ## Conventions
 
-- ESLint extends `@xwink` (shared config); Prettier enforced. Husky + lint-staged run lint/prettier on commit.
-- Commits follow Conventional Commits (commitlint + `@commitlint/config-conventional`); `CHANGELOG.md` is generated from history. Commit/CLI messages and docs are written in Chinese.
+- **Lint**：oxlint（`.oxlintrc.json`，correctness=error；启用 `consistent-type-imports`——type 必须 `import type`）。**Format**：oxfmt（`.oxfmtrc.json`）：4 空格、单引号、无分号、行宽 120。
+- TypeScript 6 strict，`moduleResolution: bundler`。包管理器 pnpm。
+- 无 husky/lint-staged；提交信息由 CI 的 `commitlint` job 校验。遵循 Conventional Commits，CHANGELOG 由 changelogen 生成。提交信息、CLI 文案与文档均用中文。
+- **CI**（`.github/workflows/ci.yml`）：lint/format/typecheck/test/build 跑 Node 20/22/24 + Node 18 运行时下限冒烟 + commitlint。**发布**（`release.yml`）：推送 `v*` tag 触发，`npm publish` 经 **OIDC 可信发布**（无 token，自动生成 provenance；需先在 npmjs.com 为本包配置 GitHub Actions 可信发布者，仓库须公开）。
