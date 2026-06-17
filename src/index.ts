@@ -43,6 +43,7 @@ program
     .option('-i --sftp-ignore-hidden', '是否忽略隐藏文件夹，默认为true')
     .option('-m --sftp-mode <mode>', '远程文件mode，默认为0o777')
     .option('--sftp-concurrency <n>', '传输与建目录的并发上限，默认为5')
+    .option('--sftp-retries <n>', '单文件传输失败的额外重试次数，默认为2')
     .option('--before-run-command <command>', '传输开始前要执行的命令，别瞎写！')
     .option('--after-run-command <command>', '传输完成后要执行的命令，别瞎写！')
     .action(async (options: Record<string, unknown>) => {
@@ -50,6 +51,7 @@ program
         const port = options.connectPort !== undefined ? Number(options.connectPort) : undefined
         const mode = options.sftpMode !== undefined ? parseInt(String(options.sftpMode), 8) : undefined
         const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
+        const retries = options.sftpRetries !== undefined ? Number(options.sftpRetries) : undefined
         const config = {
             local: options.local,
             remote: options.remote,
@@ -71,6 +73,7 @@ program
                 ignoreHidden: options.sftpIgnoreHidden,
                 mode,
                 concurrency,
+                retries,
                 debug: options.debug,
                 beforeRunCommand: options.beforeRunCommand,
                 afterRunCommand: options.afterRunCommand,

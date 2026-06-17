@@ -5,6 +5,7 @@ import { scan } from './scanner'
 import { resolveLocal, remoteIsDir, buildRemoteTarget, buildRemoteDir } from './pathmap'
 import { execCommand, shellQuote } from './exec'
 import { mapPool, DEFAULT_CONCURRENCY } from './pool'
+import { withRetry, DEFAULT_RETRIES } from './retry'
 import { Logger } from './logger'
 import { ConfigError, ConnectionError, TransferError } from './errors'
 
@@ -20,6 +21,8 @@ export interface SftpOption {
     afterRunCommand?: string
     /** 传输与建目录的并发上限（默认 {@link DEFAULT_CONCURRENCY}），避免打满 SSH `MaxSessions`。 */
     concurrency?: number
+    /** 单文件传输失败的额外重试次数（默认 {@link DEFAULT_RETRIES}），抵御网络抖动。 */
+    retries?: number
 }
 
 export interface RunOption {
@@ -184,6 +187,7 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
     const commands: string[] = []
     const mode = opts.mode ?? DEFAULT_MODE
     const concurrency = opts.concurrency ?? DEFAULT_CONCURRENCY
+    const retries = opts.retries ?? DEFAULT_RETRIES
 
     // 前置命令在扫描前执行，使其产物（如构建输出）能被纳入本次传输列表
     if (opts.beforeRunCommand) {
@@ -221,7 +225,14 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
                 return
             }
             logger.debug(`开始传输：${file} => ${target}`)
-            await fastPut(sftp, file, target, mode)
+            await withRetry(() => fastPut(sftp, file, target, mode), {
+                retries,
+                delayMs: 200,
+                onRetry: (attempt, e) =>
+                    logger.warn(
+                        `传输失败，重试 ${attempt}/${retries}：${target}（${e instanceof Error ? e.message : String(e)}）`
+                    ),
+            })
             transferred.push(target)
         } catch (e) {
             failed.push({ target, error: e instanceof Error ? e.message : String(e) })
