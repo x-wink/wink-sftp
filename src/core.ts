@@ -180,18 +180,20 @@ const planDeploy = (config: ResolvedConfig): DeployResult => {
 /** 实跑部署：建目录、传文件、跑前后命令，返回结构化结果。 */
 const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): Promise<DeployResult> => {
     const sftp = await openSftp(client)
-    const { local, remote, opts, isDir, remoteDirs, targets } = computePlan(config)
-    logger.debug('待传输文件数：' + targets.length)
-
+    const opts = config.sftpOptions
     const commands: string[] = []
     const mode = opts.mode ?? DEFAULT_MODE
     const concurrency = opts.concurrency ?? DEFAULT_CONCURRENCY
 
+    // 前置命令在扫描前执行，使其产物（如构建输出）能被纳入本次传输列表
     if (opts.beforeRunCommand) {
         logger.debug('执行前置命令：' + opts.beforeRunCommand)
         await execCommand(client, opts.beforeRunCommand)
         commands.push(opts.beforeRunCommand)
     }
+
+    const { local, remote, isDir, remoteDirs, targets } = computePlan(config)
+    logger.debug('待传输文件数：' + targets.length)
 
     if (isDir && opts.clear) {
         assertSafeClearTarget(remote)
