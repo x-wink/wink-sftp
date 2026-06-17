@@ -42,12 +42,14 @@ program
     .option('-o --sftp-override', '是否覆盖远程文件夹中已存在的文件，默认为false')
     .option('-i --sftp-ignore-hidden', '是否忽略隐藏文件夹，默认为true')
     .option('-m --sftp-mode <mode>', '远程文件mode，默认为0o777')
+    .option('--sftp-concurrency <n>', '传输与建目录的并发上限，默认为5')
     .option('--before-run-command <command>', '传输开始前要执行的命令，别瞎写！')
     .option('--after-run-command <command>', '传输完成后要执行的命令，别瞎写！')
     .action(async (options: Record<string, unknown>) => {
         const json = Boolean(options.json)
         const port = options.connectPort !== undefined ? Number(options.connectPort) : undefined
         const mode = options.sftpMode !== undefined ? parseInt(String(options.sftpMode), 8) : undefined
+        const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
         const config = {
             local: options.local,
             remote: options.remote,
@@ -68,6 +70,7 @@ program
                 override: options.sftpOverride,
                 ignoreHidden: options.sftpIgnoreHidden,
                 mode,
+                concurrency,
                 debug: options.debug,
                 beforeRunCommand: options.beforeRunCommand,
                 afterRunCommand: options.afterRunCommand,

@@ -26,6 +26,7 @@ Source is modular under `src/`:
 - `scanner.ts` — pure local FS scan.
 - `pathmap.ts` — pure path helpers (`resolveLocal` / `linuxPath` / `remoteIsDir` / `buildRemoteTarget` / `buildRemoteDir`).
 - `exec.ts` — `shellQuote` (POSIX escaping) + `execCommand` (structured result).
+- `pool.ts` — `mapPool` (受限并发 + 保序返回) 与 `DEFAULT_CONCURRENCY`，传输/建目录共用。
 - `logger.ts` — leveled logging (human → stderr, `--json` → stdout) + `redact` (secret masking).
 - `errors.ts` — typed errors carrying exit codes.
 

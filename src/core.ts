@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import { scan } from './scanner'
 import { resolveLocal, remoteIsDir, buildRemoteTarget, buildRemoteDir } from './pathmap'
 import { execCommand, shellQuote } from './exec'
+import { mapPool, DEFAULT_CONCURRENCY } from './pool'
 import { Logger } from './logger'
 import { ConfigError, ConnectionError, TransferError } from './errors'
 
@@ -17,6 +18,8 @@ export interface SftpOption {
     ignoreHidden?: boolean
     beforeRunCommand?: string
     afterRunCommand?: string
+    /** 传输与建目录的并发上限（默认 {@link DEFAULT_CONCURRENCY}），避免打满 SSH `MaxSessions`。 */
+    concurrency?: number
 }
 
 export interface RunOption {
@@ -182,6 +185,7 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
 
     const commands: string[] = []
     const mode = opts.mode ?? DEFAULT_MODE
+    const concurrency = opts.concurrency ?? DEFAULT_CONCURRENCY
 
     if (opts.beforeRunCommand) {
         logger.debug('执行前置命令：' + opts.beforeRunCommand)
@@ -197,32 +201,30 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
         logger.debug('已清空远程文件夹：' + remote)
     }
 
-    for (const dir of remoteDirs) {
-        // 顺序建目录，避免一次性打满 SSH MaxSessions；并发池在 Phase 2 引入
-        // oxlint-disable-next-line no-await-in-loop
+    // 受限并发建目录，避免一次性打满 SSH MaxSessions
+    await mapPool(remoteDirs, concurrency, async (dir) => {
         await execCommand(client, `mkdir -p ${shellQuote(dir)}`)
         logger.debug('创建文件夹：' + dir)
-    }
+    })
 
     const transferred: string[] = []
     const skipped: string[] = []
     const failed: DeployResult['failed'] = []
-    await Promise.all(
-        targets.map(async ({ file, target }) => {
-            try {
-                if (!opts.override && (await remoteExists(client, target))) {
-                    logger.debug('文件已存在，跳过：' + target)
-                    skipped.push(target)
-                    return
-                }
-                logger.debug(`开始传输：${file} => ${target}`)
-                await fastPut(sftp, file, target, mode)
-                transferred.push(target)
-            } catch (e) {
-                failed.push({ target, error: e instanceof Error ? e.message : String(e) })
+    // 受限并发传输：同一时刻最多 concurrency 个文件在飞
+    await mapPool(targets, concurrency, async ({ file, target }) => {
+        try {
+            if (!opts.override && (await remoteExists(client, target))) {
+                logger.debug('文件已存在，跳过：' + target)
+                skipped.push(target)
+                return
             }
-        })
-    )
+            logger.debug(`开始传输：${file} => ${target}`)
+            await fastPut(sftp, file, target, mode)
+            transferred.push(target)
+        } catch (e) {
+            failed.push({ target, error: e instanceof Error ? e.message : String(e) })
+        }
+    })
 
     if (opts.afterRunCommand) {
         logger.debug('执行后置命令：' + opts.afterRunCommand)
