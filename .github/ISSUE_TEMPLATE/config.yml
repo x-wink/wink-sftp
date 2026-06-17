@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+    - name: 📖 文档与路线图
+      url: https://github.com/x-wink/wink-sftp/blob/main/docs/ROADMAP.md
+      about: 提 Issue 前先看看路线图与架构文档，确认是否已有规划。

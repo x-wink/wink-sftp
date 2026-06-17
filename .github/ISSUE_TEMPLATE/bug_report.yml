@@ -1,0 +1,42 @@
+name: 🐛 Bug 反馈
+description: 报告 wink-sftp 的缺陷或异常行为
+labels: [bug]
+body:
+    - type: markdown
+      attributes:
+          value: 感谢反馈！请尽量提供可复现信息。**切勿粘贴明文密码 / 私钥。**
+    - type: textarea
+      id: what-happened
+      attributes:
+          label: 问题描述
+          description: 发生了什么？期望是什么？
+      validations:
+          required: true
+    - type: textarea
+      id: repro
+      attributes:
+          label: 复现步骤
+          description: 命令 / 配置（脱敏后）/ 操作顺序
+          placeholder: |
+              1. 配置 sftp.json 如下（已脱敏）……
+              2. 执行 `wink-sftp -c sftp.json --json`
+              3. 看到……
+      validations:
+          required: true
+    - type: textarea
+      id: output
+      attributes:
+          label: 输出与退出码
+          description: 贴上 `--json` 结果或 `--debug` 日志（脱敏）、进程退出码
+          render: shell
+    - type: textarea
+      id: env
+      attributes:
+          label: 环境
+          description: wink-sftp 版本、Node 版本、操作系统、远程服务器系统
+          placeholder: |
+              - wink-sftp: 1.1.0
+              - Node: 22.x
+              - OS: Windows 11 / macOS / Ubuntu
+      validations:
+          required: true
