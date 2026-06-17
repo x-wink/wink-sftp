@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 全程使用中文回复。
 - 不要主动提交（`git commit`），仅在用户明确要求时才提交。
 - 提交信息中不附加任何署名（不加 `Co-Authored-By`、`Generated with` 等）。
+- **发版前必须更新 README 使用说明与相关文档**（README 选项/配置表/示例、`docs/ROADMAP.md`、`docs/ARCHITECTURE.md`、`CLAUDE.md`），确保文档与新功能同步，不留过时描述。
 
 ## Planning docs
 
