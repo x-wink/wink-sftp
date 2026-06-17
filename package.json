@@ -16,7 +16,8 @@
         "url": "https://github.com/x-wink"
     },
     "repository": {
-        "url": "https://github.com/x-wink/wink-sftp"
+        "type": "git",
+        "url": "git+https://github.com/x-wink/wink-sftp.git"
     },
     "bin": {
         "wink-sftp": "dist/index.js"
