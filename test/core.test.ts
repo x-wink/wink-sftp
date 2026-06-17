@@ -23,9 +23,9 @@ describe('run（dry-run）', () => {
         expect(r.transferred.length).toBeGreaterThan(0)
     })
 
-    it('既无密码也无私钥/agent：抛配置错误', () => {
-        // resolveConfig 在 run 内同步校验，故同步抛出
-        expect(() => run({ ...base })).toThrow(/connect\.password 或 connect\.privateKey/)
+    it('既无密码也无私钥/agent：抛配置错误', async () => {
+        // run 为 async，配置校验失败表现为 Promise reject
+        await expect(run({ ...base })).rejects.toThrow(/connect\.password 或 connect\.privateKey/)
     })
 
     it('前置/后置命令进入 commands', async () => {

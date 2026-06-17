@@ -27,6 +27,8 @@ Source is modular under `src/`:
 - `pathmap.ts` — pure path helpers (`resolveLocal` / `linuxPath` / `remoteIsDir` / `buildRemoteTarget` / `buildRemoteDir`).
 - `exec.ts` — `shellQuote` (POSIX escaping) + `execCommand` (structured result).
 - `pool.ts` — `mapPool` (受限并发 + 保序返回) 与 `DEFAULT_CONCURRENCY`，传输/建目录共用。
+- `retry.ts` — `withRetry` (线性退避重试) 与 `DEFAULT_RETRIES`，单文件传输失败重试。
+- `audit.ts` — 写操作审计：`appendAudit` / `formatAuditLine` / `defaultAuditPath`（`~/.wink-sftp/audit.log`）。
 - `logger.ts` — leveled logging (human → stderr, `--json` → stdout) + `redact` (secret masking).
 - `errors.ts` — typed errors carrying exit codes.
 

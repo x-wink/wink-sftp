@@ -41,6 +41,8 @@ program
     .option('--debug', '输出调试日志，默认false')
     .option('--json', '以 JSON 结构化结果输出到 stdout（人类日志走 stderr），便于脚本/agent 解析')
     .option('--dry-run', '预演：打印将执行的动作但不建立连接、不落地')
+    .option('--no-audit', '禁用本地审计日志')
+    .option('--audit-log <path>', '审计日志文件路径，默认 ~/.wink-sftp/audit.log')
     .option('-e --sftp-excludes <paths>', '要排除的本地目录，暂时只支持全字匹配，多个目录用英文逗号分隔，默认为空')
     .option('-f --sftp-flat', '是否扁平化目录（本地文件夹下任意深度的文件都直接传输到远程文件夹下），默认为false')
     .option('--sftp-clear', '是否在传输开始前清空远程文件夹，默认为false。慎用！删错了你别怪我！')
@@ -75,6 +77,8 @@ program
                 debug: options.debug,
                 json,
                 dryRun: Boolean(options.dryRun),
+                audit: options.audit as boolean | undefined,
+                auditLog: options.auditLog as string | undefined,
                 connect: {
                     host: options.connectHost,
                     port,

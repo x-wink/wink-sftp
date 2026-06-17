@@ -6,6 +6,7 @@ import { resolveLocal, remoteIsDir, buildRemoteTarget, buildRemoteDir, findFlatC
 import { execCommand, shellQuote } from './exec'
 import { mapPool, DEFAULT_CONCURRENCY } from './pool'
 import { withRetry, DEFAULT_RETRIES } from './retry'
+import { appendAudit, defaultAuditPath } from './audit'
 import { Logger } from './logger'
 import { ConfigError, ConnectionError, TransferError } from './errors'
 
@@ -36,6 +37,10 @@ export interface RunOption {
     json?: boolean
     /** 预演：打印将执行的动作但不落地（不建立连接）。 */
     dryRun?: boolean
+    /** 是否记录本地审计日志（默认 true；预演不记录）。 */
+    audit?: boolean
+    /** 审计日志文件路径（默认 `~/.wink-sftp/audit.log`）。 */
+    auditLog?: string
 }
 
 interface ResolvedConfig {
@@ -46,6 +51,8 @@ interface ResolvedConfig {
     debug: boolean
     json: boolean
     dryRun: boolean
+    audit: boolean
+    auditLog: string
 }
 
 /** 部署结果：结构化，供 CLI 渲染与定退出码、供 agent 解析。 */
@@ -109,6 +116,8 @@ const resolveConfig = (options: RunOption = {}): ResolvedConfig => {
         debug,
         json: (raw.json ?? false) || cliJson,
         dryRun: (raw.dryRun ?? false) || cliDryRun,
+        audit: raw.audit ?? options.audit ?? true,
+        auditLog: raw.auditLog ?? options.auditLog ?? defaultAuditPath(),
     }
 }
 
@@ -304,15 +313,46 @@ const connectAndDeploy = (config: ResolvedConfig, logger: Logger): Promise<Deplo
             .connect(config.connect)
     })
 
+/** 记录一条审计；写入失败仅降级为 debug 日志，绝不中断主流程。 */
+const recordAudit = (config: ResolvedConfig, logger: Logger, ok: boolean, detail: Record<string, unknown>): void => {
+    if (!config.audit) return
+    try {
+        appendAudit(config.auditLog, {
+            time: new Date().toISOString(),
+            host: config.connect.host,
+            username: config.connect.username,
+            action: 'deploy',
+            ok,
+            detail: { remote: config.remote, ...detail },
+        })
+    } catch (e) {
+        logger.debug('审计日志写入失败：', e instanceof Error ? e.message : String(e))
+    }
+}
+
 /**
  * 入口：解析配置后执行部署或预演。
  *
  * 成功 resolve {@link DeployResult}（含 `ok`，部分文件失败时 `ok=false`）；
  * 配置/连接/远程命令错误时 reject 类型化错误。退出码由 CLI 层据此决定。
+ * 实跑（非预演）会在结束后追加一条本地审计记录。
  */
-export const run = (options?: RunOption): Promise<DeployResult> => {
+export const run = async (options?: RunOption): Promise<DeployResult> => {
     const config = resolveConfig(options)
     const logger = new Logger({ debug: config.debug, json: config.json })
     logger.debug('解析后的配置：', config)
-    return config.dryRun ? Promise.resolve(planDeploy(config)) : connectAndDeploy(config, logger)
+    if (config.dryRun) return planDeploy(config)
+    try {
+        const result = await connectAndDeploy(config, logger)
+        recordAudit(config, logger, result.ok, {
+            transferred: result.transferred.length,
+            skipped: result.skipped.length,
+            failed: result.failed.length,
+            commands: result.commands,
+        })
+        return result
+    } catch (e) {
+        recordAudit(config, logger, false, { error: e instanceof Error ? e.message : String(e) })
+        throw e
+    }
 }
