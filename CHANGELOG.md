@@ -1,3 +1,42 @@
+## v1.2.0
+
+[compare changes](https://github.com/x-wink/wink-sftp/compare/v1.1.0...v1.2.0)
+
+### 🚀 Enhancements
+
+- **core:** 传输与建目录引入并发池 ([7d7a66c](https://github.com/x-wink/wink-sftp/commit/7d7a66c))
+- **core:** 单文件传输失败自动重试 ([da56c27](https://github.com/x-wink/wink-sftp/commit/da56c27))
+- **core:** Flat 同名覆盖告警与传输进度日志 ([fb492b6](https://github.com/x-wink/wink-sftp/commit/fb492b6))
+- **core:** 支持 SSH 密钥登录 ([9b7fc89](https://github.com/x-wink/wink-sftp/commit/9b7fc89))
+- **core:** 写操作审计日志 ([0b4e749](https://github.com/x-wink/wink-sftp/commit/0b4e749))
+- **skill:** 新增 deploy Skill ([e8f9617](https://github.com/x-wink/wink-sftp/commit/e8f9617))
+- **skill:** Deploy Skill 随 npm 包发布并补文档 ([8cdb2fc](https://github.com/x-wink/wink-sftp/commit/8cdb2fc))
+
+### 🩹 Fixes
+
+- **core:** BeforeRunCommand 在扫描前执行 ([36daaa4](https://github.com/x-wink/wink-sftp/commit/36daaa4))
+- **core:** 审计开关以调用级优先于配置文件 ([87eb513](https://github.com/x-wink/wink-sftp/commit/87eb513))
+
+### 📖 Documentation
+
+- 路线图增加进度追踪 ([d5708ac](https://github.com/x-wink/wink-sftp/commit/d5708ac))
+- 补充 LICENSE 与贡献者文档 ([95ad18d](https://github.com/x-wink/wink-sftp/commit/95ad18d))
+- 标记 Phase 2 全部条目落地待发布 ([3d0332e](https://github.com/x-wink/wink-sftp/commit/3d0332e))
+- 增加发版前更新文档的协作约定 ([2abee9b](https://github.com/x-wink/wink-sftp/commit/2abee9b))
+
+### 🏡 Chore
+
+- 规范 package.json repository 字段 ([e30c26d](https://github.com/x-wink/wink-sftp/commit/e30c26d))
+
+### ✅ Tests
+
+- 补 SSH/SFTP mock 与覆盖率门槛 ([8c9d2fd](https://github.com/x-wink/wink-sftp/commit/8c9d2fd))
+
+### ❤️ Contributors
+
+- 向文可 <1041367524@qq.com>
+- Xwink <1041367524@qq.com>
+
 ## v1.1.0
 
 [compare changes](https://github.com/x-wink/wink-sftp/compare/v1.0.4...v1.1.0)
