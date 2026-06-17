@@ -1,9 +1,11 @@
 #! /usr/bin/env node
+import fs from 'node:fs'
+import path from 'node:path'
 import { Command } from 'commander'
 import { name, version, description } from '../package.json'
 import type { RunOption, SftpOption, DeployResult } from './core'
 import { run } from './core'
-import { exitCodeOf, WinkSftpError } from './errors'
+import { ConfigError, exitCodeOf, WinkSftpError } from './errors'
 
 const program = new Command()
 program.name(name).version(version).description(description)
@@ -33,7 +35,9 @@ program
     .option('-h --connect-host <host>', '远程服务器地址，必填')
     .option('-p --connect-port <port>', '远程服务器端口，必填')
     .option('-u --connect-username <user>', '远程服务器用户名，必填')
-    .option('--connect-password <pwd>', '远程服务器密码，必填')
+    .option('--connect-password <pwd>', '远程服务器密码（与私钥二选一）')
+    .option('--connect-private-key <path>', '私钥文件路径（相对启动目录），用于密钥登录')
+    .option('--connect-passphrase <pass>', '私钥口令（加密私钥时需要）')
     .option('--debug', '输出调试日志，默认false')
     .option('--json', '以 JSON 结构化结果输出到 stdout（人类日志走 stderr），便于脚本/agent 解析')
     .option('--dry-run', '预演：打印将执行的动作但不建立连接、不落地')
@@ -49,39 +53,51 @@ program
     .option('--after-run-command <command>', '传输完成后要执行的命令，别瞎写！')
     .action(async (options: Record<string, unknown>) => {
         const json = Boolean(options.json)
-        const port = options.connectPort !== undefined ? Number(options.connectPort) : undefined
-        const mode = options.sftpMode !== undefined ? parseInt(String(options.sftpMode), 8) : undefined
-        const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
-        const retries = options.sftpRetries !== undefined ? Number(options.sftpRetries) : undefined
-        const config = {
-            local: options.local,
-            remote: options.remote,
-            config: options.config,
-            debug: options.debug,
-            json,
-            dryRun: Boolean(options.dryRun),
-            connect: {
-                host: options.connectHost,
-                port,
-                username: options.connectUsername,
-                password: options.connectPassword,
-            },
-            sftpOptions: {
-                excludes: (options.sftpExcludes as string | undefined)?.split(','),
-                flat: options.sftpFlat,
-                clear: options.sftpClear,
-                override: options.sftpOverride,
-                ignoreHidden: options.sftpIgnoreHidden,
-                mode,
-                concurrency,
-                retries,
-                debug: options.debug,
-                beforeRunCommand: options.beforeRunCommand,
-                afterRunCommand: options.afterRunCommand,
-            } as SftpOption,
-        } as RunOption
-
         try {
+            const port = options.connectPort !== undefined ? Number(options.connectPort) : undefined
+            // 私钥以文件路径传入（相对启动目录），此处读为内容交给 ssh2
+            let privateKey: string | undefined
+            if (options.connectPrivateKey !== undefined) {
+                const keyPath = path.resolve(process.cwd(), String(options.connectPrivateKey))
+                try {
+                    privateKey = String(fs.readFileSync(keyPath))
+                } catch (e) {
+                    throw new ConfigError(`读取私钥文件失败：${keyPath}`, { cause: e })
+                }
+            }
+            const mode = options.sftpMode !== undefined ? parseInt(String(options.sftpMode), 8) : undefined
+            const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
+            const retries = options.sftpRetries !== undefined ? Number(options.sftpRetries) : undefined
+            const config = {
+                local: options.local,
+                remote: options.remote,
+                config: options.config,
+                debug: options.debug,
+                json,
+                dryRun: Boolean(options.dryRun),
+                connect: {
+                    host: options.connectHost,
+                    port,
+                    username: options.connectUsername,
+                    password: options.connectPassword,
+                    privateKey,
+                    passphrase: options.connectPassphrase,
+                },
+                sftpOptions: {
+                    excludes: (options.sftpExcludes as string | undefined)?.split(','),
+                    flat: options.sftpFlat,
+                    clear: options.sftpClear,
+                    override: options.sftpOverride,
+                    ignoreHidden: options.sftpIgnoreHidden,
+                    mode,
+                    concurrency,
+                    retries,
+                    debug: options.debug,
+                    beforeRunCommand: options.beforeRunCommand,
+                    afterRunCommand: options.afterRunCommand,
+                } as SftpOption,
+            } as RunOption
+
             const result = await run(config)
             if (json) {
                 process.stdout.write(JSON.stringify(result) + '\n')

@@ -90,9 +90,12 @@ const resolveConfig = (options: RunOption = {}): ResolvedConfig => {
         }
     }
     const connect = raw.connect ?? {}
-    if (!connect.host || !connect.port || !connect.username || !connect.password || !raw.local || !raw.remote) {
+    // 密码登录或密钥登录二选一：privateKey / agent 任一存在即可，允许密码留空
+    const hasAuth = Boolean(connect.password) || Boolean(connect.privateKey) || Boolean(connect.agent)
+    if (!connect.host || !connect.port || !connect.username || !hasAuth || !raw.local || !raw.remote) {
         throw new ConfigError(
-            '配置至少包含以下属性：connect.host、connect.port、connect.username、connect.password、local、remote'
+            '配置至少包含以下属性：connect.host、connect.port、connect.username、' +
+                'connect.password 或 connect.privateKey（或 connect.agent）、local、remote'
         )
     }
     const debug = raw.debug ?? cliDebug

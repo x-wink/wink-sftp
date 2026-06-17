@@ -58,7 +58,7 @@ pnpm run release    # build + changelogen --release --push（改版本/CHANGELOG
 - **路径**：本地用 `resolveLocal`（相对 cwd）；远程一律 POSIX，用 `linuxPath` 构造，绝不用裸 `path.join`。`remoteIsDir` / `buildRemoteTarget` 为纯函数且对空列表安全。
 - **`ignoreHidden`** 只对相对 `local` 的路径段做 `startsWith('.')` 判定。
 - **退出码**：config 2 / connection 3 / remote-command 4 / transfer 5 / 通用 1。
-- 仅支持密码登录（密钥登录在路线图中）。
+- 登录方式：密码或密钥（`connect.privateKey` / `passphrase` / `agent`）二选一，`resolveConfig` 校验至少其一；CLI `--connect-private-key` 传文件路径，由 `index.ts` 读为内容。
 
 ## CLI ↔ config mapping
 
