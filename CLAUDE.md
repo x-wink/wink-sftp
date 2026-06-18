@@ -27,6 +27,8 @@ Source is modular under `src/`:
 - `core.ts` — orchestration：`planDeploy`（dry-run）、`deploy`、`run`（单机）、`runMany`/`runAuto`（多机）、`rollback`、`pull`、`ls`；返回结构化 `DeployResult` / `MultiDeployResult` / `RollbackResult` / `PullResult` / `LsResult`。连接经 `withSession`（`session.ts`）。
 - `session.ts` — `SshSession`（`open`/`exec`/`sftp` 缓存/`close`/`raw`）+ `withSession`：通用 SSH 会话抽象，部署/下载/浏览/guard 的共同底座，也是编程式 API。
 - `guard.ts` — 守护式变更原语：`guard`（备份→应用→校验→reload→失败回滚，不抛错、收进 `GuardResult`）+ `backupRemote`/`restoreRemote`/`existsRemote`，依赖结构化 `ExecCapable`（`SshSession` 天然满足，便于 stub 测试）。
+- `ops.ts` — 运维原语（只读/执行，经 `SshSession`，需 connect 不需 local/remote）：`runExec`（远程执行，退出码非零作结构化结果不抛）、`status`（agentless 快照：一次 exec 采集 + 纯函数解析器 `parseLoadavg`/`parseMeminfo`/`parseDf` 归一化，best-effort）、`tailLogs`（`tail -n` + grep）。
+- `edit.ts` — `edit`：用本地 `--file` 内容原子替换远程文件，复用 `guard`（备份→写入→`--validate`→`--reload`→失败回滚）。
 - `config.ts` — 配置加载与解析：zod schema（单一事实源）、JSON/YAML 双格式 `loadConfigFile`、`${ENV_VAR}` secrets 插值（`interpolateSecrets` + `.env`）、多环境 `deepMerge` 选择、多机 `hosts`、`resolveConfig`。
 - `scanner.ts` — pure local FS scan + `.winksftpignore`（`loadIgnorePatterns`，gitignore 风格 glob）。
 - `pathmap.ts` — pure path helpers (`resolveLocal` / `linuxPath` / `remoteIsDir` / `buildRemoteTarget` / `buildRemoteDir`).
@@ -62,7 +64,7 @@ pnpm run release:tag # 待 main 完整门禁绿后再推 tag（git push --follow
 
 ## Architecture
 
-`run(options)` 解析配置后，分两路：`--dry-run` 走 `planDeploy`（纯本地计算、不连接），否则经 `withConnection` 新建一个**每次独立的** `ssh2.Client` 跑 `deploy`。`pull` / `ls` 同样复用 `withConnection`。三者分别返回 `DeployResult` / `PullResult` / `LsResult`，由 CLI 层渲染并据此定退出码。
+`run(options)` 解析配置后，分两路：`--dry-run` 走 `planDeploy`（纯本地计算、不连接），否则经 `withSession`（`session.ts`）新建一个**每次独立的** `SshSession`（内含独立 `ssh2.Client`）跑 `deploy`。`pull` / `ls` / `exec` / `status` / `logs` / `edit` 同样复用 `withSession`。各命令返回各自的结构化结果（`DeployResult` / `MultiDeployResult` / `RollbackResult` / `PullResult` / `LsResult` / `ExecRunResult` / `StatusResult` / `LogsResult` / `EditResult`），由 CLI 层渲染并据此定退出码。
 
 编辑时须注意：
 
@@ -72,7 +74,7 @@ pnpm run release:tag # 待 main 完整门禁绿后再推 tag（git push --follow
 - **路径**：本地用 `resolveLocal`（相对 cwd）；远程一律 POSIX，用 `linuxPath` 构造，绝不用裸 `path.join`（`pull` 镜像用 `path.posix.relative`）。`remoteIsDir` / `buildRemoteTarget` 为纯函数且对空列表安全。
 - **`ignoreHidden`** 只对相对 `local` 的路径段做 `startsWith('.')` 判定；`.winksftpignore` / `sftpOptions.ignore` 走 `ignore` 包的 gitignore 匹配。
 - **增量**（`sftpOptions.incremental`）优先于 `override`：`sftp.stat` 取远程 size+mtime；上传后 `setRemoteMtime`（`sftp.utimes`）把远程 mtime 对齐为本地 mtime，`isUnchanged` 以 size 相同且 mtime **相等**判未变更（不依赖远程时钟）。存在性检查（override 跳过）也用 `statRemote`（不再用 exec shell `stat`）。
-- **配置**：所有加载/校验/合并在 `config.ts`。zod 校验**文件**配置（编程式 `RunOption` 由 TS 保证；数值字段用 `z.coerce.number` 兼容 `${ENV_VAR}` 注入的字符串）；`${ENV_VAR}` 在 zod 校验前注入（环境变量优先于 `.env`），缺变量抛 `ConfigError`。**合并优先级（高→低）**：调用级开关 ＞ 显式参数 ＞ 选中环境覆盖 ＞ 文件 ＞ 默认；即文件为基底，`--env` 环境覆盖叠加其上，命令行/编程式**显式字段**（`pickConfigFields`：connect/local/remote/sftpOptions/environments）再 `deepMerge` 覆盖，undefined 不覆盖。只读命令（`ls`）以 `resolveConfig(opts, { requireLocal: false })` 跳过 `local` 必填校验。
+- **配置**：所有加载/校验/合并在 `config.ts`。zod 校验**文件**配置（编程式 `RunOption` 由 TS 保证；数值字段用 `z.coerce.number` 兼容 `${ENV_VAR}` 注入的字符串）；`${ENV_VAR}` 在 zod 校验前注入（环境变量优先于 `.env`），缺变量抛 `ConfigError`。**合并优先级（高→低）**：调用级开关 ＞ 显式参数 ＞ 选中环境覆盖 ＞ 文件 ＞ 默认；即文件为基底，`--env` 环境覆盖叠加其上，命令行/编程式**显式字段**（`pickConfigFields`：connect/local/remote/sftpOptions/environments）再 `deepMerge` 覆盖，undefined 不覆盖。只读命令（`ls`）以 `resolveConfig(opts, { requireLocal: false })` 跳过 `local` 必填校验；只需连接、目标走 CLI 参数的命令（`exec`/`status`/`logs`/`edit`）再加 `requireRemote: false` 跳过 `remote` 必填。
 - **文件级备份/回滚**（`sftpOptions.backup` / `--sftp-backup`）：部署前对**已存在**的远程目标 `backupRemote`（`cp -a` 到 `${remote}.wink-bak.<ts>`）；任一文件失败则 `restoreRemote` 回滚（`rm -rf` + `mv`），**回滚后不执行 afterRunCommand**；成功保留快照。`rollback`（`--rollback`）在父目录按 `${base}.wink-bak.` 前缀找时间戳最大者还原。回滚仅文件级，不撤销钩子副作用。
 - **多机**（`hosts` 数组 / `--hosts`）：`runMany` 每台一个独立 `SshSession`；continue（默认，`mapPool` 受限并发跑完汇总）/ `failFast`（顺序、首台失败即停）。连接/配置错误按主机捕获进 `HostDeployResult.error`，不互相影响。`runAuto` 据 `hosts` 是否非空分派单机/多机；`run`/`runMany` 都用 `collectHosts`（options.hosts 优先，否则配置文件 hosts）。
 - **退出码**：config 2 / connection 3 / remote-command 4 / transfer 5 / 通用 1。

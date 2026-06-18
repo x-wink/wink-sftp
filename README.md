@@ -30,6 +30,7 @@
 
 - 🚀 一条命令把本地目录递归部署到远程
 - ⬇️ 双向传输：`pull` 下载远程文件/目录、`ls` 浏览远程目录（只读）
+- 🩺 运维原语：`exec` 远程执行、`status` 资源快照（agentless）、`logs` 日志查看（tail+grep）、`edit` 守护式配置编辑
 - 📄 JSON / YAML 配置文件（zod 校验），便于纳入版本管理与多项目复用
 - 🌐 多环境配置：单文件内放 `dev` / `test` / `prod`，`--env prod` 选择并深合并
 - 🔐 secrets 用 `${ENV_VAR}` 引用，从环境变量 / `.env` 注入，配置不落明文
@@ -211,6 +212,30 @@ npx wink-sftp ls -c ./sftp.json
 
 - `ls` 输出目录项（名称、类型、大小），`--json` 给出结构化数组，便于脚本/agent 解析。
 - `pull` 用 `fastGet` 下载：远程为目录时递归镜像到本地、为文件时下载单个文件；同样支持并发与失败重试。
+
+## 🩺 运维命令（exec / status / logs / edit）
+
+把工具从「部署」展开为「SSH 快捷操作入口」：连接信息与部署一致（CLI 参数或 `-c` 配置文件），都支持 `--json`。
+
+```bash
+# exec：远程执行一条命令，收集 stdout/stderr/退出码（退出码透传为进程退出码，便于脚本分支）
+npx wink-sftp exec 'systemctl is-active nginx' -h 1.2.3.4 -u root --connect-password '***' --json
+
+# status：agentless 资源/健康快照（CPU 核数/负载/内存/磁盘），不在远程装任何东西
+npx wink-sftp status -c ./sftp.json --json
+
+# logs：查看远程日志末 N 行，可选 grep 过滤
+npx wink-sftp logs /var/log/nginx/error.log -n 100 --grep timeout -c ./sftp.json
+
+# edit：守护式编辑远程配置——备份→替换→校验→reload→失败自动回滚
+npx wink-sftp edit /etc/nginx/nginx.conf --file ./nginx.conf \
+  --validate 'nginx -t' --reload 'systemctl reload nginx' -c ./sftp.json --json
+```
+
+- **`exec`**：诊断原语——命令退出码非零时 `ok=false` 但**不报错**，结构化返回 `{ok,command,stdout,stderr,code}`；进程退出码即远程退出码。
+- **`status`**：纯 SSH 解析 `hostname`/`/proc/loadavg`/`nproc`/`/proc/meminfo`/`df`，归一化为 `{host,load,cpuCores,memory,disks}`；**best-effort**，采集不到的字段为 `null`、整体仍 `ok`。跨发行版解析差异由纯函数解析层吸收（针对 Linux）。
+- **`logs`**：`tail -n <lines>`（默认 200）+ 可选 `--grep`；路径与模式自动转义。流式 `--follow` 暂未做。
+- **`edit`**：用本地 `--file` 内容**原子替换**远程文件，复用 `guard`；`--validate` 校验失败或 `--reload` 失败都会回滚到备份。返回 `{ok,target,backup,rolledBack,error}`。**边界**：文件级回滚，不撤销 reload 等副作用。
 
 ## 🌐 多环境配置
 
@@ -440,7 +465,7 @@ done
 
 ## 🗺️ 路线图
 
-`v1.x` 把「部署」做到可信、好用：v1.1 安全/正确性止血与 `--json`/`--dry-run`；v1.2 加固健壮性（并发/重试）、SSH 密钥登录与审计、deploy Skill；v1.3 提效——`pull`/`ls` 双向传输、增量、`.winksftpignore`、多环境、JSON+YAML、`${ENV_VAR}` secrets。**v2.0 升级为编排工具**：多机并行部署、文件级备份/回滚、`guard` 守护式变更原语、`SshSession` 编程式 API。后续将逐步扩展为面向单机全生命周期的「SSH 快捷操作入口」。完整规划见 [docs/ROADMAP.md](./docs/ROADMAP.md) 与 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
+`v1.x` 把「部署」做到可信、好用：v1.1 安全/正确性止血与 `--json`/`--dry-run`；v1.2 加固健壮性（并发/重试）、SSH 密钥登录与审计、deploy Skill；v1.3 提效——`pull`/`ls` 双向传输、增量、`.winksftpignore`、多环境、JSON+YAML、`${ENV_VAR}` secrets。**v2.0 升级为编排工具**：多机并行部署、文件级备份/回滚、`guard` 守护式变更原语、`SshSession` 编程式 API。**v3.0 起展开为「SSH 运维入口」**：已交付 `exec`/`status`/`logs` 只读原语与 `edit` 守护式配置编辑；环境初始化 `provision` 与进程/服务管理 `ps`/`service` 在后续批次推进。完整规划见 [docs/ROADMAP.md](./docs/ROADMAP.md) 与 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
 
 ## 🛠️ 本地开发
 
