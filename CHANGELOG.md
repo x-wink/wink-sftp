@@ -1,3 +1,35 @@
+## v2.0.0
+
+[compare changes](https://github.com/x-wink/wink-sftp/compare/v1.3.2...v2.0.0)
+
+### 🚀 Enhancements
+
+- 新增 SshSession 编程式 API、guard 守护式变更原语与库入口 ([6c1f013](https://github.com/x-wink/wink-sftp/commit/6c1f013))
+- 部署文件级备份与失败自动回滚 ([2415097](https://github.com/x-wink/wink-sftp/commit/2415097))
+- 多机并行部署（hosts 数组 + 失败策略 + 主机并发） ([5523faa](https://github.com/x-wink/wink-sftp/commit/5523faa))
+- 新增手动回滚命令 --rollback（恢复到最近快照） ([db06081](https://github.com/x-wink/wink-sftp/commit/db06081))
+
+### 📖 Documentation
+
+- CLAUDE.md 补充 oxfmt 校验 Markdown 与 commitlint 标准 type 约定 ([5c43147](https://github.com/x-wink/wink-sftp/commit/5c43147))
+- 同步 v2.0 编排能力（多机/备份回滚/编程式 API）至 README/ROADMAP/CLAUDE ([4a8ec57](https://github.com/x-wink/wink-sftp/commit/4a8ec57))
+
+### 🏡 Chore
+
+- Commitlint type-enum 改用标准常用类型，格式化 ROADMAP 表格 ([20eb29e](https://github.com/x-wink/wink-sftp/commit/20eb29e))
+
+### ✅ Tests
+
+- **e2e:** 增多机+文件级备份场景，测试服务端改用 RSA PKCS1 密钥消除偶发失败 ([bdbec03](https://github.com/x-wink/wink-sftp/commit/bdbec03))
+
+### 🤖 CI
+
+- 升级 GitHub Actions 至 v6（checkout/setup-node/pnpm），消除 Node 20 弃用告警 ([9ca611a](https://github.com/x-wink/wink-sftp/commit/9ca611a))
+
+### ❤️ Contributors
+
+- Xwink <1041367524@qq.com>
+
 ## v1.3.2
 
 [compare changes](https://github.com/x-wink/wink-sftp/compare/v1.3.1...v1.3.2)
