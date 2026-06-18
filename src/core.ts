@@ -1,5 +1,4 @@
-import { Client } from 'ssh2'
-import type { ConnectConfig, SFTPWrapper, Stats } from 'ssh2'
+import type { Client, ConnectConfig, SFTPWrapper, Stats } from 'ssh2'
 import fs from 'node:fs'
 import path from 'node:path'
 import { scan, loadIgnorePatterns } from './scanner'
@@ -10,6 +9,7 @@ import { withRetry, DEFAULT_RETRIES } from './retry'
 import { appendAudit } from './audit'
 import { resolveConfig } from './config'
 import { Logger } from './logger'
+import { withSession } from './session'
 import { ConfigError, ConnectionError, TransferError } from './errors'
 
 export interface SftpOption {
@@ -325,35 +325,11 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
 }
 
 /**
- * 通用连接运行器：新建独立 `ssh2.Client`，连接成功后在其上运行 `fn`，结束后断开。
+ * 通用连接运行器：经 {@link withSession} 新建独立会话，在其底层 `Client` 上运行 `fn`，结束后断开。
  * 连接失败 / 超时 reject 类型化 {@link ConnectionError}。部署 / 下载 / 浏览共用。
  */
 const withConnection = <T>(connect: ConnectConfig, logger: Logger, fn: (client: Client) => Promise<T>): Promise<T> =>
-    new Promise((resolve, reject) => {
-        const client = new Client()
-        let settled = false
-        const finish = (fn2: () => void) => {
-            if (!settled) {
-                settled = true
-                fn2()
-            }
-        }
-        client
-            .on('ready', async () => {
-                logger.debug('连接成功')
-                try {
-                    const result = await fn(client)
-                    finish(() => resolve(result))
-                } catch (e) {
-                    finish(() => reject(e))
-                } finally {
-                    client.end()
-                }
-            })
-            .on('error', (err) => finish(() => reject(new ConnectionError('SSH 连接失败', { cause: err }))))
-            .on('timeout', () => finish(() => reject(new ConnectionError('SSH 会话超时'))))
-            .connect(connect)
-    })
+    withSession(connect, logger, (session) => fn(session.raw as Client))
 
 /** 记录一条审计；写入失败仅降级为 debug 日志，绝不中断主流程。 */
 const recordAudit = (config: ResolvedConfig, logger: Logger, ok: boolean, detail: Record<string, unknown>): void => {

@@ -25,15 +25,16 @@
     "files": [
         "dist/src/*.d.ts",
         "dist/index.js",
+        "dist/lib/index.js",
         ".claude/skills"
     ],
-    "main": "dist/index.js",
-    "types": "dist/src/index.d.ts",
+    "main": "dist/lib/index.js",
+    "types": "dist/src/lib.d.ts",
     "exports": {
         ".": {
-            "types": "./dist/src/index.d.ts",
-            "import": "./dist/index.js",
-            "require": "./dist/index.js"
+            "types": "./dist/src/lib.d.ts",
+            "import": "./dist/lib/index.js",
+            "require": "./dist/lib/index.js"
         }
     },
     "publishConfig": {
@@ -46,7 +47,7 @@
         "test:coverage": "vitest run --coverage",
         "e2e": "tsx dev/e2e/run.ts",
         "typecheck": "tsc --noEmit",
-        "build": "tsc -emitDeclarationOnly && ncc build ./src/index.ts -o ./dist",
+        "build": "tsc -emitDeclarationOnly && ncc build ./src/index.ts -o ./dist && ncc build ./src/lib.ts -o ./dist/lib",
         "changelog": "changelogen --output CHANGELOG.md",
         "release": "pnpm run build && changelogen --release --push",
         "lint": "oxlint --fix",
