@@ -1,3 +1,19 @@
+## v2.4.0
+
+[compare changes](https://github.com/x-wink/wink-sftp/compare/v2.3.0...v2.4.0)
+
+### 🚀 Enhancements
+
+- 新增流式原语 logs --follow 与 exec --stream ([320c91c](https://github.com/x-wink/wink-sftp/commit/320c91c))
+
+### 🩹 Fixes
+
+- **stream:** 修复发版前 code-review 发现的流式边角问题 ([2b589e5](https://github.com/x-wink/wink-sftp/commit/2b589e5))
+
+### ❤️ Contributors
+
+- 向文可 <1041367524@qq.com>
+
 ## v2.3.0
 
 [compare changes](https://github.com/x-wink/wink-sftp/compare/v2.2.0...v2.3.0)
