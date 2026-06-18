@@ -1,3 +1,19 @@
+## v2.5.0
+
+[compare changes](https://github.com/x-wink/wink-sftp/compare/v2.4.0...v2.5.0)
+
+### 🚀 Enhancements
+
+- **provision:** 新增 nginx/redis/mysql recipe（install + verify） ([396895b](https://github.com/x-wink/wink-sftp/commit/396895b))
+
+### 🩹 Fixes
+
+- **provision:** 修复发版前 code-review 发现的 secret 脱敏漏洞 ([62796df](https://github.com/x-wink/wink-sftp/commit/62796df))
+
+### ❤️ Contributors
+
+- 向文可 <1041367524@qq.com>
+
 ## v2.4.0
 
 [compare changes](https://github.com/x-wink/wink-sftp/compare/v2.3.0...v2.4.0)
