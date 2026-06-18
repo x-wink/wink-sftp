@@ -76,14 +76,18 @@ export const parseLoadavg = (text: string): [number, number, number] | null => {
     return nums.length === 3 && nums.every((n) => !Number.isNaN(n)) ? [nums[0], nums[1], nums[2]] : null
 }
 
-/** 解析 `/proc/meminfo`：取 MemTotal 与 MemAvailable（KB），已用 = 总 - 可用；缺失返回 null。 */
+/**
+ * 解析 `/proc/meminfo`：取 MemTotal 与 MemAvailable（KB），已用 = 总 - 可用。
+ * 老内核（< 3.14）/部分容器无 MemAvailable 时回退到 MemFree（偏保守，已用会略高估）；
+ * 连 MemTotal 都缺才返回 null。
+ */
 export const parseMeminfo = (text: string): StatusResult['memory'] => {
     const get = (key: string): number | null => {
         const m = text.match(new RegExp(`^${key}:\\s+(\\d+)`, 'm'))
         return m ? Number(m[1]) : null
     }
     const totalKb = get('MemTotal')
-    const availableKb = get('MemAvailable')
+    const availableKb = get('MemAvailable') ?? get('MemFree')
     if (totalKb === null || availableKb === null) return null
     return { totalKb, usedKb: totalKb - availableKb, availableKb }
 }
@@ -157,14 +161,19 @@ export const tailLogs = async (
 ): Promise<LogsResult> => {
     const config = resolveConfig(options, { requireLocal: false, requireRemote: false })
     const logger = new Logger({ debug: config.debug, json: config.json })
-    const n = Math.max(1, Math.floor(lines) || 1)
-    // 先 grep 过滤再 tail，使「最后 N 行匹配项」语义直观；无 grep 则直接 tail
+    // 非有限/非正数（如 -n 传了非数字 → NaN）回退到默认 200，而非静默变成 1 行
+    const n = Number.isFinite(lines) && lines >= 1 ? Math.floor(lines) : 200
+    const target = shellQuote(remotePath)
+    // 先 `test -f` 守门：文件缺失则整条命令非零退出 → 统一报错（与 grep/非 grep 两路行为一致，
+    // 也与 `ls` 对不存在目标报错的语义对齐）；存在但 grep 无命中时管道退出码取 tail（0），正常返回空。
     const cmd = grep
-        ? `grep -- ${shellQuote(grep)} ${shellQuote(remotePath)} | tail -n ${n}`
-        : `tail -n ${n} ${shellQuote(remotePath)}`
+        ? `test -f ${target} && grep -- ${shellQuote(grep)} ${target} | tail -n ${n}`
+        : `test -f ${target} && tail -n ${n} ${target}`
     return withSession(config.connect, logger, async (session) => {
         const r = await session.exec(cmd)
-        const text = r.stdout.replace(/\n$/, '')
-        return { ok: true, path: remotePath, lines: text ? text.split('\n') : [] }
+        // 按 \r?\n 切分（兼容 CRLF），并丢弃末尾换行产生的空串
+        const out = r.stdout.split(/\r?\n/)
+        if (out.length && out[out.length - 1] === '') out.pop()
+        return { ok: true, path: remotePath, lines: out }
     })
 }

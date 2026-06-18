@@ -18,7 +18,14 @@ describe('parseMeminfo', () => {
     it('用 MemTotal 与 MemAvailable 算已用', () => {
         expect(parseMeminfo(FIXTURE)).toEqual({ totalKb: 16384000, usedKb: 8192000, availableKb: 8192000 })
     })
-    it('缺 MemAvailable 返回 null', () => {
+    it('无 MemAvailable 时回退 MemFree（老内核）', () => {
+        expect(parseMeminfo('MemTotal: 1000 kB\nMemFree: 300 kB')).toEqual({
+            totalKb: 1000,
+            usedKb: 700,
+            availableKb: 300,
+        })
+    })
+    it('连 MemFree 都缺才返回 null', () => {
         expect(parseMeminfo('MemTotal:  100 kB')).toBeNull()
     })
 })

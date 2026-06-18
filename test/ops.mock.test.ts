@@ -97,23 +97,36 @@ describe('status', () => {
 })
 
 describe('tailLogs', () => {
-    it('无 grep：tail -n 指定行数，路径转义', async () => {
+    it('无 grep：test -f 守门 + tail -n，路径转义', async () => {
         h.state.responses = [{ match: 'tail -n 50', stdout: 'line1\nline2\n' }]
         const r = await tailLogs('/var/log/app.log', { connect: conn }, { lines: 50 })
         expect(r.lines).toEqual(['line1', 'line2'])
-        expect(h.state.execs[0]).toBe(`tail -n 50 '/var/log/app.log'`)
+        expect(h.state.execs[0]).toBe(`test -f '/var/log/app.log' && tail -n 50 '/var/log/app.log'`)
     })
 
-    it('带 grep：先过滤再 tail，模式与路径均转义', async () => {
+    it('带 grep：test -f 守门 + 先过滤再 tail，模式与路径均转义', async () => {
         h.state.responses = [{ match: 'grep', stdout: 'ERROR x\n' }]
         const r = await tailLogs('/var/log/app.log', { connect: conn }, { grep: 'ERROR', lines: 100 })
         expect(r.lines).toEqual(['ERROR x'])
-        expect(h.state.execs[0]).toBe(`grep -- 'ERROR' '/var/log/app.log' | tail -n 100`)
+        expect(h.state.execs[0]).toBe(`test -f '/var/log/app.log' && grep -- 'ERROR' '/var/log/app.log' | tail -n 100`)
     })
 
     it('空输出返回空行数组', async () => {
         h.state.responses = [{ match: 'tail', stdout: '' }]
         const r = await tailLogs('/var/log/app.log', { connect: conn })
         expect(r.lines).toEqual([])
+    })
+
+    it('CRLF + 末尾换行：按 \\r?\\n 切分且不留尾部空行', async () => {
+        h.state.responses = [{ match: 'tail', stdout: 'a\r\nb\r\n' }]
+        const r = await tailLogs('/var/log/app.log', { connect: conn })
+        expect(r.lines).toEqual(['a', 'b'])
+    })
+
+    it('非数字 -n 回退默认 200（而非静默变 1）', async () => {
+        h.state.responses = [{ match: 'tail -n 200', stdout: 'x\n' }]
+        const r = await tailLogs('/var/log/app.log', { connect: conn }, { lines: Number('abc') })
+        expect(r.lines).toEqual(['x'])
+        expect(h.state.execs[0]).toContain('tail -n 200')
     })
 })
