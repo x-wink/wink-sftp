@@ -14,13 +14,13 @@ jobs:
                 # 开发工具链需 Node 22+（pnpm 11 依赖 node:sqlite，Node 20 会报 ERR_UNKNOWN_BUILTIN_MODULE）
                 node-version: [22, 24]
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Setup pnpm
-              uses: pnpm/action-setup@v4
+              uses: pnpm/action-setup@v6
 
             - name: Setup Node.js ${{ matrix.node-version }}
-              uses: actions/setup-node@v4
+              uses: actions/setup-node@v6
               with:
                   node-version: ${{ matrix.node-version }}
                   cache: pnpm
@@ -52,15 +52,15 @@ jobs:
     commitlint:
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
               with:
                   fetch-depth: 0
 
             - name: Setup pnpm
-              uses: pnpm/action-setup@v4
+              uses: pnpm/action-setup@v6
 
             - name: Setup Node.js
-              uses: actions/setup-node@v4
+              uses: actions/setup-node@v6
               with:
                   node-version: 22
                   cache: pnpm
@@ -81,13 +81,13 @@ jobs:
     runtime-floor:
         runs-on: ubuntu-latest
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v6
 
             - name: Setup pnpm
-              uses: pnpm/action-setup@v4
+              uses: pnpm/action-setup@v6
 
             - name: Setup Node.js 22 (构建工具链)
-              uses: actions/setup-node@v4
+              uses: actions/setup-node@v6
               with:
                   node-version: 22
                   cache: pnpm
@@ -99,7 +99,7 @@ jobs:
               run: pnpm run build
 
             - name: Setup Node.js 18 (运行时下限)
-              uses: actions/setup-node@v4
+              uses: actions/setup-node@v6
               with:
                   node-version: 18
 
