@@ -202,6 +202,54 @@ const main = async (): Promise<void> => {
         console.log('12) 畸形 --hosts（解析不出主机）→ 退出码 2 / kind=config')
         r = await runCli(['-l', dist, '-r', remote, '--hosts', ',,', '--json', ...conn(pw)])
         check('exit=2 && kind=config', r.code === 2 && r.json.kind === 'config', { code: r.code, json: r.json })
+
+        console.log('13) exec：成功命令带回 stdout/退出码 0；失败命令透传退出码')
+        r = await runCli(['exec', 'echo wink-ok', '--json', ...conn(pw)])
+        check(
+            'ok && code=0 && stdout 含 wink-ok',
+            r.json.ok === true && r.json.code === 0 && String(r.json.stdout).includes('wink-ok'),
+            r.json
+        )
+        r = await runCli(['exec', 'exit 3', '--json', ...conn(pw)])
+        check('退出码透传为 3、ok=false', r.code === 3 && r.json.ok === false && r.json.code === 3, {
+            code: r.code,
+            json: r.json,
+        })
+
+        console.log('14) status：best-effort 快照，ok=true 且 host 非空')
+        r = await runCli(['status', '--json', ...conn(pw)])
+        check('ok && host 非空', r.json.ok === true && typeof r.json.host === 'string' && !!r.json.host, r.json)
+
+        console.log('15) logs：tail 末 N 行 + grep 过滤')
+        const logFile = path.join(tmp, 'app.log')
+        fs.writeFileSync(logFile, ['l1', 'ERROR a', 'l3', 'ERROR b', 'l5'].join('\n') + '\n')
+        r = await runCli(['logs', logFile, '-n', '2', '--json', ...conn(pw)])
+        check('末 2 行', Array.isArray(r.json.lines) && (r.json.lines as string[]).join(',') === 'ERROR b,l5', r.json)
+        r = await runCli(['logs', logFile, '--grep', 'ERROR', '--json', ...conn(pw)])
+        check(
+            'grep 过滤只留 ERROR 行',
+            Array.isArray(r.json.lines) && (r.json.lines as string[]).join(',') === 'ERROR a,ERROR b',
+            r.json
+        )
+
+        console.log('16) edit：校验通过则替换；校验失败则回滚')
+        const target = path.join(tmp, 'app.conf')
+        fs.writeFileSync(target, 'OLD')
+        const newContent = path.join(tmp, 'new.conf')
+        fs.writeFileSync(newContent, 'NEW')
+        r = await runCli(['edit', target, '--file', newContent, '--validate', 'true', '--json', ...conn(pw)])
+        check('ok && 内容已替换为 NEW', r.json.ok === true && fs.readFileSync(target, 'utf8') === 'NEW', {
+            json: r.json,
+            content: fs.readFileSync(target, 'utf8'),
+        })
+        // 再编辑为 BAD 但校验失败 → 回滚，内容应仍是 NEW
+        fs.writeFileSync(newContent, 'BAD')
+        r = await runCli(['edit', target, '--file', newContent, '--validate', 'false', '--json', ...conn(pw)])
+        check(
+            'rolledBack && 内容回滚为 NEW',
+            r.json.ok === false && r.json.rolledBack === true && fs.readFileSync(target, 'utf8') === 'NEW',
+            { json: r.json, content: fs.readFileSync(target, 'utf8') }
+        )
     } finally {
         await server.close()
         fs.rmSync(tmp, { recursive: true, force: true })

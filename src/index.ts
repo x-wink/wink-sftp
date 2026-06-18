@@ -13,6 +13,10 @@ import type {
     RollbackResult,
 } from './core'
 import { runAuto, pull, ls, rollback } from './core'
+import { runExec, status, tailLogs } from './ops'
+import type { ExecRunResult, StatusResult, LogsResult } from './ops'
+import { edit } from './edit'
+import type { EditResult } from './edit'
 import { ConfigError, exitCodeOf, WinkSftpError } from './errors'
 
 const program = new Command()
@@ -154,6 +158,42 @@ const renderLs = (r: LsResult): void => {
     }
 }
 
+/** 把 exec 结果渲染为人类摘要：stdout 原样到 stderr 区，附退出码。 */
+const renderExec = (r: ExecRunResult): void => {
+    if (r.stdout) process.stderr.write(r.stdout.endsWith('\n') ? r.stdout : r.stdout + '\n')
+    if (r.stderr) process.stderr.write(r.stderr.endsWith('\n') ? r.stderr : r.stderr + '\n')
+    console.error(`退出码 ${r.code}`)
+}
+
+/** KB → GB 字符串（两位小数）。 */
+const kbToGb = (kb: number): string => (kb / 1024 / 1024).toFixed(2)
+
+/** 把资源快照渲染为人类摘要（走 stderr）。 */
+const renderStatus = (r: StatusResult): void => {
+    console.error(`主机 ${r.host ?? '?'}`)
+    if (r.load) console.error(`  负载（1/5/15 分钟）：${r.load.join(' / ')}`)
+    if (r.cpuCores !== null) console.error(`  CPU 核数：${r.cpuCores}`)
+    if (r.memory) {
+        console.error(`  内存：已用 ${kbToGb(r.memory.usedKb)}G / 总 ${kbToGb(r.memory.totalKb)}G`)
+    }
+    for (const d of r.disks) {
+        console.error(`  磁盘 ${d.mountedOn}：${d.usePercent}% 已用（${d.filesystem}）`)
+    }
+}
+
+/** 把日志行渲染到 stderr（每行原样）。 */
+const renderLogs = (r: LogsResult): void => {
+    console.error(`${r.path}（${r.lines.length} 行）：`)
+    for (const line of r.lines) console.error(line)
+}
+
+/** 把守护式编辑结果渲染为人类摘要（走 stderr）。 */
+const renderEdit = (r: EditResult): void => {
+    if (r.ok) console.error(`已编辑 ${r.target}${r.backup ? `（备份：${r.backup}）` : ''}`)
+    else if (r.rolledBack) console.error(`编辑失败已回滚 ${r.target}：${r.error ?? ''}`)
+    else console.error(`编辑失败 ${r.target}：${r.error ?? ''}`)
+}
+
 // deploy（默认命令，无子命令时执行；保持向后兼容）。
 // 必须作为独立子命令而非 program 根命令——否则连接选项会与 pull/ls 子命令同名，
 // commander 会把同名选项归到父命令，导致子命令收不到连接参数。
@@ -275,6 +315,78 @@ addConnectionOptions(program.command('ls'))
             },
             renderLs,
             1
+        )
+    })
+
+// exec（远程执行）：跑一条远程命令并收集结构化结果；退出码透传为进程退出码
+addConnectionOptions(program.command('exec'))
+    .description('在远程执行命令并收集 stdout/stderr/退出码（读/写原语）')
+    .argument('<command>', '要执行的远程命令（建议用引号包裹整条命令）')
+    .action(async (command: string, options: Record<string, unknown>) => {
+        const json = Boolean(options.json)
+        try {
+            const result = await runExec(command, buildBase(options))
+            if (json) process.stdout.write(JSON.stringify(result) + '\n')
+            else renderExec(result)
+            process.exitCode = result.code // 远程命令退出码透传，便于脚本分支
+        } catch (e) {
+            handleError(e, json)
+        }
+    })
+
+// status（资源快照）：agentless 采集 CPU/内存/磁盘/负载（只读）
+addConnectionOptions(program.command('status'))
+    .description('远程主机资源/健康快照：CPU/内存/磁盘/负载（只读，best-effort）')
+    .action(async (options: Record<string, unknown>) => {
+        await execute(Boolean(options.json), () => status(buildBase(options)), renderStatus, 1)
+    })
+
+// logs（日志查看）：tail -n + 可选 grep（只读）
+addConnectionOptions(program.command('logs'))
+    .description('查看远程日志：tail 末 N 行 + 可选 grep 过滤（只读）')
+    .argument('<path>', '远程日志文件路径')
+    .option('-n --lines <n>', '查看末尾多少行，默认 200')
+    .option('--grep <pattern>', '只保留匹配该模式的行（grep）')
+    .action(async (remotePath: string, options: Record<string, unknown>) => {
+        await execute(
+            Boolean(options.json),
+            () =>
+                tailLogs(remotePath, buildBase(options), {
+                    lines: options.lines !== undefined ? Number(options.lines) : undefined,
+                    grep: options.grep as string | undefined,
+                }),
+            renderLogs,
+            1
+        )
+    })
+
+// edit（守护式配置编辑）：用本地文件内容原子替换远程文件，失败回滚（写）
+addConnectionOptions(program.command('edit'))
+    .description('守护式编辑远程配置：备份→替换→校验→reload→失败回滚（写）')
+    .argument('[remote]', '远程目标文件（亦可用 -r 指定）')
+    .option('-r --remote <remote>', '远程目标文件路径')
+    .option('--file <path>', '本地内容文件（其内容将替换远程文件）')
+    .option('--validate <command>', '替换后执行的校验命令（如 "nginx -t"），失败回滚')
+    .option('--reload <command>', '校验通过后执行的 reload 命令（如 "systemctl reload nginx"），失败回滚')
+    .action(async (remoteArg: string | undefined, options: Record<string, unknown>) => {
+        await execute(
+            Boolean(options.json),
+            () => {
+                const remote = (remoteArg ?? options.remote) as string | undefined
+                if (!remote) throw new ConfigError('edit 需要远程目标文件（位置参数或 -r）')
+                if (!options.file) throw new ConfigError('edit 需要 --file 指定本地内容文件')
+                return edit(
+                    {
+                        remote,
+                        file: options.file as string,
+                        validate: options.validate as string | undefined,
+                        reload: options.reload as string | undefined,
+                    },
+                    buildBase(options)
+                )
+            },
+            renderEdit,
+            4
         )
     })
 

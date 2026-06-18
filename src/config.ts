@@ -186,9 +186,14 @@ export const deepMerge = <T extends Record<string, unknown>>(base: T, override: 
     return out as T
 }
 
-/** {@link resolveConfig} 选项：`requireLocal=false` 用于只读命令（如 `ls`），不强制 `local`。 */
+/**
+ * {@link resolveConfig} 选项：
+ * - `requireLocal=false` 用于只读/远程命令（如 `ls`），不强制 `local`；
+ * - `requireRemote=false` 用于只需连接、目标走 CLI 参数的命令（如 `exec`/`status`/`logs`），不强制 `remote`。
+ */
 export interface ResolveOptions {
     requireLocal?: boolean
+    requireRemote?: boolean
 }
 
 /** 参与「文件 ← 显式参数」深合并的配置字段（其余如 json/dryRun/audit 为调用级开关，单独处理）。 */
@@ -251,7 +256,7 @@ export const mergeConfig = (options: RunOption = {}): RunOption => {
  */
 export const resolveConfig = (
     options: RunOption = {},
-    { requireLocal = true }: ResolveOptions = {}
+    { requireLocal = true, requireRemote = true }: ResolveOptions = {}
 ): ResolvedConfig => {
     // 调用级开关即便用 -c 配置文件也应生效（叠加在文件之上）。
     const cliDebug = options.debug ?? false
@@ -267,12 +272,13 @@ export const resolveConfig = (
         !connect.username ||
         !hasAuth ||
         (requireLocal && !raw.local) ||
-        !raw.remote
+        (requireRemote && !raw.remote)
     ) {
+        const need = ['local', 'remote'].filter((f) => (f === 'local' ? requireLocal : requireRemote))
         throw new ConfigError(
             '配置至少包含以下属性：connect.host、connect.port、connect.username、' +
-                'connect.password 或 connect.privateKey（或 connect.agent）、' +
-                (requireLocal ? 'local、remote' : 'remote')
+                'connect.password 或 connect.privateKey（或 connect.agent）' +
+                (need.length ? '、' + need.join('、') : '')
         )
     }
     const debug = raw.debug ?? cliDebug
@@ -281,7 +287,7 @@ export const resolveConfig = (
     return {
         connect,
         local: raw.local ?? '',
-        remote: raw.remote,
+        remote: raw.remote ?? '',
         sftpOptions,
         debug,
         json: (raw.json ?? false) || cliJson,
