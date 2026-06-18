@@ -1,3 +1,15 @@
+## v2.0.1
+
+[compare changes](https://github.com/x-wink/wink-sftp/compare/v2.0.0...v2.0.1)
+
+### 🩹 Fixes
+
+- 修复 v2.0 代码审查发现的问题 ([bc1b63b](https://github.com/x-wink/wink-sftp/commit/bc1b63b))
+
+### ❤️ Contributors
+
+- Xwink <1041367524@qq.com>
+
 ## v2.0.0
 
 [compare changes](https://github.com/x-wink/wink-sftp/compare/v1.3.2...v2.0.0)
