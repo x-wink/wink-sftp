@@ -13,8 +13,16 @@ import type {
     RollbackResult,
 } from './core'
 import { runAuto, pull, ls, rollback } from './core'
-import { runExec, status, tailLogs } from './ops'
-import type { ExecRunResult, StatusResult, LogsResult } from './ops'
+import { runExec, status, tailLogs, ps, service, SERVICE_ACTIONS, SERVICE_MANAGERS } from './ops'
+import type {
+    ExecRunResult,
+    StatusResult,
+    LogsResult,
+    PsResult,
+    ServiceResult,
+    ServiceAction,
+    ServiceManager,
+} from './ops'
 import { edit } from './edit'
 import type { EditResult } from './edit'
 import { ConfigError, exitCodeOf, WinkSftpError } from './errors'
@@ -185,6 +193,23 @@ const renderStatus = (r: StatusResult): void => {
 const renderLogs = (r: LogsResult): void => {
     console.error(`${r.path}（${r.lines.length} 行）：`)
     for (const line of r.lines) console.error(line)
+}
+
+/** 把进程快照渲染为人类摘要（走 stderr）。 */
+const renderPs = (r: PsResult): void => {
+    console.error(`进程（${r.processes.length}）：`)
+    for (const p of r.processes) {
+        const cpu = `${p.cpu.toFixed(1)}%`.padStart(6)
+        const mem = `${p.mem.toFixed(1)}%`.padStart(6)
+        console.error(`  ${String(p.pid).padStart(7)}  cpu ${cpu}  mem ${mem}  ${p.user.padEnd(10)}  ${p.command}`)
+    }
+}
+
+/** 把服务操作结果渲染为人类摘要（走 stderr）。 */
+const renderService = (r: ServiceResult): void => {
+    console.error(`${r.manager} ${r.action} ${r.service} → 退出码 ${r.code}`)
+    if (r.stdout) process.stderr.write(r.stdout.endsWith('\n') ? r.stdout : r.stdout + '\n')
+    if (r.stderr) process.stderr.write(r.stderr.endsWith('\n') ? r.stderr : r.stderr + '\n')
 }
 
 /** 把守护式编辑结果渲染为人类摘要（走 stderr）。 */
@@ -386,6 +411,47 @@ addConnectionOptions(program.command('edit'))
                 )
             },
             renderEdit,
+            4
+        )
+    })
+
+// ps（进程快照）：ps -A 解析为结构化进程列表，可选 --grep 过滤（只读）
+addConnectionOptions(program.command('ps'))
+    .description('远程进程快照：PID/属主/CPU/内存/命令，可选 --grep 过滤（只读）')
+    .option('--grep <pattern>', '只保留命令行包含该子串的进程')
+    .action(async (options: Record<string, unknown>) => {
+        await execute(
+            Boolean(options.json),
+            () => ps(buildBase(options), { grep: options.grep as string | undefined }),
+            renderPs,
+            1
+        )
+    })
+
+// service（服务管理）：status 只读放行；start/stop/restart/reload 为写动作需 --yes（写本地审计）
+addConnectionOptions(program.command('service'))
+    .description('服务管理：status（只读）/ start·stop·restart·reload（写，需 --yes）')
+    .argument('<name>', '服务/容器名')
+    .argument('<action>', `动作：${SERVICE_ACTIONS.join('|')}`)
+    .option('--manager <manager>', `服务管理器：${SERVICE_MANAGERS.join('|')}（默认 systemd）`, 'systemd')
+    .option('--yes', '确认执行写动作（start/stop/restart/reload）')
+    .action(async (svcName: string, action: string, options: Record<string, unknown>) => {
+        await execute(
+            Boolean(options.json),
+            () => {
+                if (!SERVICE_ACTIONS.includes(action as ServiceAction)) {
+                    throw new ConfigError(`未知服务动作：${action}（支持 ${SERVICE_ACTIONS.join('/')}）`)
+                }
+                const manager = options.manager as string
+                if (!SERVICE_MANAGERS.includes(manager as ServiceManager)) {
+                    throw new ConfigError(`未知服务管理器：${manager}（支持 ${SERVICE_MANAGERS.join('/')}）`)
+                }
+                return service(svcName, action as ServiceAction, buildBase(options), {
+                    manager: manager as ServiceManager,
+                    yes: Boolean(options.yes),
+                })
+            },
+            renderService,
             4
         )
     })

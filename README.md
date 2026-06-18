@@ -30,7 +30,7 @@
 
 - 🚀 一条命令把本地目录递归部署到远程
 - ⬇️ 双向传输：`pull` 下载远程文件/目录、`ls` 浏览远程目录（只读）
-- 🩺 运维原语：`exec` 远程执行、`status` 资源快照（agentless）、`logs` 日志查看（tail+grep）、`edit` 守护式配置编辑
+- 🩺 运维原语：`exec` 远程执行、`status` 资源快照（agentless）、`logs` 日志（tail+grep）、`ps` 进程快照、`service` 服务管理、`edit` 守护式配置编辑
 - 📄 JSON / YAML 配置文件（zod 校验），便于纳入版本管理与多项目复用
 - 🌐 多环境配置：单文件内放 `dev` / `test` / `prod`，`--env prod` 选择并深合并
 - 🔐 secrets 用 `${ENV_VAR}` 引用，从环境变量 / `.env` 注入，配置不落明文
@@ -213,7 +213,7 @@ npx wink-sftp ls -c ./sftp.json
 - `ls` 输出目录项（名称、类型、大小），`--json` 给出结构化数组，便于脚本/agent 解析。
 - `pull` 用 `fastGet` 下载：远程为目录时递归镜像到本地、为文件时下载单个文件；同样支持并发与失败重试。
 
-## 🩺 运维命令（exec / status / logs / edit）
+## 🩺 运维命令（exec / status / logs / ps / service / edit）
 
 把工具从「部署」展开为「SSH 快捷操作入口」：连接信息与部署一致（CLI 参数或 `-c` 配置文件），都支持 `--json`。
 
@@ -227,6 +227,14 @@ npx wink-sftp status -c ./sftp.json --json
 # logs：查看远程日志末 N 行，可选 grep 过滤
 npx wink-sftp logs /var/log/nginx/error.log -n 100 --grep timeout -c ./sftp.json
 
+# ps：远程进程快照（PID/属主/CPU/内存/命令），可选 --grep 按命令行过滤
+npx wink-sftp ps --grep node -c ./sftp.json --json
+
+# service：服务管理——status 只读放行；写动作（start/stop/restart/reload）须 --yes 确认
+npx wink-sftp service nginx status -c ./sftp.json --json
+npx wink-sftp service nginx restart --yes -c ./sftp.json --json
+npx wink-sftp service redis restart --manager docker --yes -c ./sftp.json
+
 # edit：守护式编辑远程配置——备份→替换→校验→reload→失败自动回滚
 npx wink-sftp edit /etc/nginx/nginx.conf --file ./nginx.conf \
   --validate 'nginx -t' --reload 'systemctl reload nginx' -c ./sftp.json --json
@@ -235,6 +243,8 @@ npx wink-sftp edit /etc/nginx/nginx.conf --file ./nginx.conf \
 - **`exec`**：诊断原语——命令退出码非零时 `ok=false` 但**不报错**，结构化返回 `{ok,command,stdout,stderr,code}`；进程退出码即远程退出码。
 - **`status`**：纯 SSH 解析 `hostname`/`/proc/loadavg`/`nproc`/`/proc/meminfo`/`df`，归一化为 `{host,load,cpuCores,memory,disks}`；**best-effort**，采集不到的字段为 `null`、整体仍 `ok`。跨发行版解析差异由纯函数解析层吸收（针对 Linux）。
 - **`logs`**：`tail -n <lines>`（默认 200）+ 可选 `--grep`；路径与模式自动转义。流式 `--follow` 暂未做。
+- **`ps`**：一次 `ps -A` 采集并结构化为 `{pid,ppid,user,cpu,mem,rssKb,command}` 列表；`--grep` 在**客户端**按命令行子串过滤（避免 grep 进程自身入列）。只读。
+- **`service`**：`status`（只读）/ `start`·`stop`·`restart`·`reload`（写）。`--manager systemd`（默认）`|pm2|docker`；**读写分离**：写动作须 `--yes` 确认并记本地审计，命令退出码非零作 `ok=false` 不报错。docker 不支持 `reload`。
 - **`edit`**：用本地 `--file` 内容**原子替换**远程文件，复用 `guard`；`--validate` 校验失败或 `--reload` 失败都会回滚到备份。返回 `{ok,target,backup,rolledBack,error}`。**边界**：文件级回滚，不撤销 reload 等副作用。
 
 ## 🌐 多环境配置

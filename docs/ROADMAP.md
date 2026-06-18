@@ -133,7 +133,8 @@ Agent 协作：
 > **进度（按「先只读原语跑顺，再守护式写」的次序分批）**：
 >
 > - ✅ **已交付（首批）**：`exec`（远程执行）、`status`（agentless 资源快照）、`logs`（tail + grep）只读原语 + `edit`（守护式配置编辑，复用 `guard`）。各有 fixture/mock 单测 + e2e（真 `/bin/sh`）。
-> - ⬜ **待做**：`provision`（环境初始化，主打，见下）、`ps`/`service`（进程/服务管理）、`logs --follow` 流式。
+> - ✅ **已交付（次批）**：`ps`（进程快照，`ps -A` 解析 + 客户端 grep）+ `service`（服务管理，systemd/pm2/docker，读写分离：写动作须 `--yes` + 审计）。纯函数 + mock 单测 + e2e。
+> - ⬜ **待做**：`provision`（环境初始化，主打，见下）、`logs --follow` 流式。
 
 ### 环境初始化（单机 provision）— 主打
 
@@ -157,13 +158,14 @@ stack:
 
 ### 只读运维原语 — agent 诊断
 
-| 子命令           | 读/写 | 状态 | 说明                                            |
-| ---------------- | ----- | ---- | ----------------------------------------------- |
-| `status`         | 读    | ✅   | 资源/健康快照（CPU/内存/磁盘/负载），`--json`   |
-| `logs`           | 读    | ✅   | `tail -n` 末 N 行 + grep（`--follow` 流式待做） |
-| `ls` / `browse`  | 读    | ✅   | 远程文件浏览（v1.3 已交付）                     |
-| `exec`           | 读/写 | ✅   | 远程执行，`run()` 收集（`stream()` 流式待做）   |
-| `ps` / `service` | 读/写 | ⬜   | 进程查看与服务管理（systemd/pm2/docker）        |
+| 子命令          | 读/写 | 状态 | 说明                                            |
+| --------------- | ----- | ---- | ----------------------------------------------- |
+| `status`        | 读    | ✅   | 资源/健康快照（CPU/内存/磁盘/负载），`--json`   |
+| `logs`          | 读    | ✅   | `tail -n` 末 N 行 + grep（`--follow` 流式待做） |
+| `ls` / `browse` | 读    | ✅   | 远程文件浏览（v1.3 已交付）                     |
+| `exec`          | 读/写 | ✅   | 远程执行，`run()` 收集（`stream()` 流式待做）   |
+| `ps`            | 读    | ✅   | 进程快照（`ps -A` 结构化 + 客户端 grep）        |
+| `service`       | 读/写 | ✅   | 服务管理（systemd/pm2/docker），写须 `--yes`    |
 
 - **采集 agentless**：纯 SSH 解析 `top`/`free`/`df`/`/proc`，零安装；跨发行版差异由归一化层吸收。
 - **排查 = 可组合的只读原语**：不做 `diagnose` 黑盒；输出可靠的结构化「事实」，由 agent 组合推理得「判断」。
@@ -223,7 +225,7 @@ stack:
 ✅ v1.2  加固    并发 / 重试 / 密钥登录 / 审计 / 测试完善 / deploy Skill → 抗规模、可生产、可协作
 ✅ v1.3  提效    pull 下载 / ls / 增量 / ignore / 多环境 / JSON+YAML / secrets → 好用
 ✅ v2.0  扩展    guard 原语 / 多机 / 文件级回滚 / 编程 API（SshSession）  → 编排工具
-🚧 v3.0  平台    ✅ exec/status/logs/edit 运维原语 ｜ ⬜ provision/ps/service → 单机全生命周期
+🚧 v3.0  平台    ✅ exec/status/logs/ps/service/edit 运维原语 ｜ ⬜ provision → 单机全生命周期
 ⬜ v4.0  规模    inventory / 多机批量 / ink TUI / daemon + notifier      → 多机舰队 + 可视化
 ```
 

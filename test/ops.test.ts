@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseLoadavg, parseMeminfo, parseDf } from '../src/ops'
+import { parseLoadavg, parseMeminfo, parseDf, parsePs, buildServiceCommand, isWriteAction } from '../src/ops'
 
 describe('parseLoadavg', () => {
     it('取前三个数为 [1,5,15] 负载', () => {
@@ -52,5 +52,59 @@ describe('parseDf', () => {
     })
     it('空输入返回空数组', () => {
         expect(parseDf('')).toEqual([])
+    })
+})
+
+describe('parsePs', () => {
+    const FIXTURE = [
+        '  PID  PPID USER     %CPU %MEM   RSS COMMAND',
+        '    1     0 root      0.0  0.1  1024 /sbin/init',
+        '  812     1 www-data  1.5  2.3 51200 nginx: worker process',
+        '  900     1 node     12.0  5.0 88000 node /app/server.js --port 3000',
+    ].join('\n')
+    it('跳过表头，解析每个进程；末列命令行保留空格', () => {
+        const procs = parsePs(FIXTURE)
+        expect(procs).toHaveLength(3)
+        expect(procs[0]).toEqual({
+            pid: 1,
+            ppid: 0,
+            user: 'root',
+            cpu: 0,
+            mem: 0.1,
+            rssKb: 1024,
+            command: '/sbin/init',
+        })
+        expect(procs[1].command).toBe('nginx: worker process')
+        expect(procs[2].command).toBe('node /app/server.js --port 3000')
+    })
+    it('空输入返回空数组', () => {
+        expect(parsePs('')).toEqual([])
+    })
+})
+
+describe('buildServiceCommand', () => {
+    it('systemd：status 用 --no-pager，写动作直接映射，名称经 shellQuote 转义', () => {
+        expect(buildServiceCommand('systemd', 'status', 'nginx')).toBe("systemctl status --no-pager 'nginx'")
+        expect(buildServiceCommand('systemd', 'restart', 'nginx')).toBe("systemctl restart 'nginx'")
+        expect(buildServiceCommand('systemd', 'restart', 'a; rm -rf /')).toBe("systemctl restart 'a; rm -rf /'")
+    })
+    it('pm2：status 用 describe，写动作直接映射', () => {
+        expect(buildServiceCommand('pm2', 'status', 'api')).toBe("pm2 describe 'api'")
+        expect(buildServiceCommand('pm2', 'reload', 'api')).toBe("pm2 reload 'api'")
+    })
+    it('docker：status 用 ps --filter，写动作映射，reload 不支持则抛', () => {
+        expect(buildServiceCommand('docker', 'status', 'redis')).toBe("docker ps --filter name='redis'")
+        expect(buildServiceCommand('docker', 'restart', 'redis')).toBe("docker restart 'redis'")
+        expect(() => buildServiceCommand('docker', 'reload', 'redis')).toThrow()
+    })
+})
+
+describe('isWriteAction', () => {
+    it('status 只读，其余为写', () => {
+        expect(isWriteAction('status')).toBe(false)
+        expect(isWriteAction('start')).toBe(true)
+        expect(isWriteAction('stop')).toBe(true)
+        expect(isWriteAction('restart')).toBe(true)
+        expect(isWriteAction('reload')).toBe(true)
     })
 })

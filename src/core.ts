@@ -6,7 +6,7 @@ import { resolveLocal, linuxPath, remoteIsDir, buildRemoteTarget, buildRemoteDir
 import { shellQuote } from './exec'
 import { mapPool, DEFAULT_CONCURRENCY } from './pool'
 import { withRetry, DEFAULT_RETRIES } from './retry'
-import { appendAudit } from './audit'
+import { recordAudit } from './audit'
 import { resolveConfig, mergeConfig } from './config'
 import { Logger } from './logger'
 import { withSession } from './session'
@@ -404,24 +404,6 @@ const deploy = async (session: SshSession, config: ResolvedConfig, logger: Logge
     }
 }
 
-/** 记录一条审计；写入失败仅降级为 debug 日志，绝不中断主流程。 */
-const recordAudit = (config: ResolvedConfig, logger: Logger, ok: boolean, detail: Record<string, unknown>): void => {
-    if (!config.audit) return
-    try {
-        appendAudit(config.auditLog, {
-            time: new Date().toISOString(),
-            host: config.connect.host,
-            username: config.connect.username,
-            action: 'deploy',
-            ok,
-            detail: { remote: config.remote, ...detail },
-        })
-    } catch (e) {
-        // 审计写入失败不应中断部署，但用户已显式启用审计，需 warn 提示而非静默
-        logger.warn('⚠ 审计日志写入失败：' + (e instanceof Error ? e.message : String(e)))
-    }
-}
-
 /**
  * 入口：解析配置后执行部署或预演。
  *
@@ -436,7 +418,8 @@ export const run = async (options?: RunOption): Promise<DeployResult> => {
     if (config.dryRun) return planDeploy(config)
     try {
         const result = await withSession(config.connect, logger, (session) => deploy(session, config, logger))
-        recordAudit(config, logger, result.ok, {
+        recordAudit(config, logger, 'deploy', result.ok, {
+            remote: config.remote,
             transferred: result.transferred.length,
             skipped: result.skipped.length,
             failed: result.failed.length,
@@ -444,7 +427,10 @@ export const run = async (options?: RunOption): Promise<DeployResult> => {
         })
         return result
     } catch (e) {
-        recordAudit(config, logger, false, { error: e instanceof Error ? e.message : String(e) })
+        recordAudit(config, logger, 'deploy', false, {
+            remote: config.remote,
+            error: e instanceof Error ? e.message : String(e),
+        })
         throw e
     }
 }

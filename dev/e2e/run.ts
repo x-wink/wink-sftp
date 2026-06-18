@@ -250,6 +250,23 @@ const main = async (): Promise<void> => {
             r.json.ok === false && r.json.rolledBack === true && fs.readFileSync(target, 'utf8') === 'NEW',
             { json: r.json, content: fs.readFileSync(target, 'utf8') }
         )
+
+        console.log('17) ps：真跑 ps -A，返回结构化进程列表')
+        r = await runCli(['ps', '--json', ...conn(pw)])
+        const procs = r.json.processes as { pid: number; command: string }[] | undefined
+        check(
+            'ok && 至少一个进程且 pid 为数字',
+            r.json.ok === true && Array.isArray(procs) && procs.length >= 1 && typeof procs[0].pid === 'number',
+            r.json
+        )
+
+        console.log('18) service status：不存在的服务 → 优雅 ok=false（不抛）、退出码 4')
+        r = await runCli(['service', 'wink-nope-svc', 'status', '--json', ...conn(pw)])
+        check('exit=4 && ok=false', r.code === 4 && r.json.ok === false, { code: r.code, json: r.json })
+
+        console.log('19) service 写动作缺 --yes → 退出码 2 / kind=config（读写护栏）')
+        r = await runCli(['service', 'nginx', 'restart', '--json', ...conn(pw)])
+        check('exit=2 && kind=config', r.code === 2 && r.json.kind === 'config', { code: r.code, json: r.json })
     } finally {
         await server.close()
         fs.rmSync(tmp, { recursive: true, force: true })

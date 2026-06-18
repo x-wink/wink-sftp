@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { ResolvedConfig } from './core'
+import type { Logger } from './logger'
 
 /** 一条审计记录：何时 / 哪台 / 什么动作 / 结果。 */
 export interface AuditRecord {
@@ -31,4 +33,31 @@ export const formatAuditLine = (record: AuditRecord): string => JSON.stringify(r
 export const appendAudit = (file: string, record: AuditRecord): void => {
     fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.appendFileSync(file, formatAuditLine(record))
+}
+
+/**
+ * 记录一条写操作审计（部署 / edit / service 等共用）：自配置取主机/用户/路径与开关。
+ * 审计关闭时直接跳过；写入失败仅降级为 warn 提示，绝不中断主流程。
+ */
+export const recordAudit = (
+    config: ResolvedConfig,
+    logger: Logger,
+    action: string,
+    ok: boolean,
+    detail?: Record<string, unknown>
+): void => {
+    if (!config.audit) return
+    try {
+        appendAudit(config.auditLog, {
+            time: new Date().toISOString(),
+            host: config.connect.host,
+            username: config.connect.username,
+            action,
+            ok,
+            detail,
+        })
+    } catch (e) {
+        // 用户已显式启用审计，写入失败需 warn 提示而非静默，但不应中断主流程
+        logger.warn('⚠ 审计日志写入失败：' + (e instanceof Error ? e.message : String(e)))
+    }
 }

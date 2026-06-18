@@ -27,7 +27,7 @@ Source is modular under `src/`:
 - `core.ts` — orchestration：`planDeploy`（dry-run）、`deploy`、`run`（单机）、`runMany`/`runAuto`（多机）、`rollback`、`pull`、`ls`；返回结构化 `DeployResult` / `MultiDeployResult` / `RollbackResult` / `PullResult` / `LsResult`。连接经 `withSession`（`session.ts`）。
 - `session.ts` — `SshSession`（`open`/`exec`/`sftp` 缓存/`close`/`raw`）+ `withSession`：通用 SSH 会话抽象，部署/下载/浏览/guard 的共同底座，也是编程式 API。
 - `guard.ts` — 守护式变更原语：`guard`（备份→应用→校验→reload→失败回滚，不抛错、收进 `GuardResult`）+ `backupRemote`/`restoreRemote`/`existsRemote`，依赖结构化 `ExecCapable`（`SshSession` 天然满足，便于 stub 测试）。
-- `ops.ts` — 运维原语（只读/执行，经 `SshSession`，需 connect 不需 local/remote）：`runExec`（远程执行，退出码非零作结构化结果不抛）、`status`（agentless 快照：一次 exec 采集 + 纯函数解析器 `parseLoadavg`/`parseMeminfo`/`parseDf` 归一化，best-effort）、`tailLogs`（`tail -n` + grep）。
+- `ops.ts` — 运维原语（经 `SshSession`，需 connect 不需 local/remote）：`runExec`（远程执行，退出码非零作结构化结果不抛）、`status`（agentless 快照：一次 exec 采集 + 纯函数解析器 `parseLoadavg`/`parseMeminfo`/`parseDf` 归一化，best-effort）、`tailLogs`（`tail -n` + grep）、`ps`（`ps -A` 采集 + 纯函数 `parsePs` 解析 + 客户端 grep 过滤）、`service`（服务管理，纯函数 `buildServiceCommand` 构造 systemd/pm2/docker 命令；`status` 只读放行、写动作经 `isWriteAction` 判定须 `yes` 确认 + 记审计，退出码非零不抛）。
 - `edit.ts` — `edit`：用本地 `--file` 内容原子替换远程文件，复用 `guard`（备份→写入→`--validate`→`--reload`→失败回滚）。
 - `config.ts` — 配置加载与解析：zod schema（单一事实源）、JSON/YAML 双格式 `loadConfigFile`、`${ENV_VAR}` secrets 插值（`interpolateSecrets` + `.env`）、多环境 `deepMerge` 选择、多机 `hosts`、`resolveConfig`。
 - `scanner.ts` — pure local FS scan + `.winksftpignore`（`loadIgnorePatterns`，gitignore 风格 glob）。
@@ -35,7 +35,7 @@ Source is modular under `src/`:
 - `exec.ts` — `shellQuote` (POSIX escaping) + `execCommand` (structured result).
 - `pool.ts` — `mapPool` (受限并发 + 保序返回) 与 `DEFAULT_CONCURRENCY`，传输/建目录共用。
 - `retry.ts` — `withRetry` (线性退避重试) 与 `DEFAULT_RETRIES`，单文件传输失败重试。
-- `audit.ts` — 写操作审计：`appendAudit` / `formatAuditLine` / `defaultAuditPath`（`~/.wink-sftp/audit.log`）。
+- `audit.ts` — 写操作审计：`recordAudit`（从 `ResolvedConfig` 取主机/用户/开关写一条记录，审计关闭跳过、写失败仅 warn 不中断，deploy/service 等写操作共用）+ 底层 `appendAudit` / `formatAuditLine` / `defaultAuditPath`（`~/.wink-sftp/audit.log`）。
 - `logger.ts` — leveled logging (human → stderr, `--json` → stdout) + `redact` (secret masking).
 - `errors.ts` — typed errors carrying exit codes.
 
@@ -66,7 +66,7 @@ pnpm run release:tag # 待 main 完整门禁绿后再推 tag（git push --follow
 
 ## Architecture
 
-`run(options)` 解析配置后，分两路：`--dry-run` 走 `planDeploy`（纯本地计算、不连接），否则经 `withSession`（`session.ts`）新建一个**每次独立的** `SshSession`（内含独立 `ssh2.Client`）跑 `deploy`。`pull` / `ls` / `exec` / `status` / `logs` / `edit` 同样复用 `withSession`。各命令返回各自的结构化结果（`DeployResult` / `MultiDeployResult` / `RollbackResult` / `PullResult` / `LsResult` / `ExecRunResult` / `StatusResult` / `LogsResult` / `EditResult`），由 CLI 层渲染并据此定退出码。
+`run(options)` 解析配置后，分两路：`--dry-run` 走 `planDeploy`（纯本地计算、不连接），否则经 `withSession`（`session.ts`）新建一个**每次独立的** `SshSession`（内含独立 `ssh2.Client`）跑 `deploy`。`pull` / `ls` / `exec` / `status` / `logs` / `ps` / `service` / `edit` 同样复用 `withSession`。各命令返回各自的结构化结果（`DeployResult` / `MultiDeployResult` / `RollbackResult` / `PullResult` / `LsResult` / `ExecRunResult` / `StatusResult` / `LogsResult` / `PsResult` / `ServiceResult` / `EditResult`），由 CLI 层渲染并据此定退出码。
 
 编辑时须注意：
 

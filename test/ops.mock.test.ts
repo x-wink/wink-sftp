@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { runExec, status, tailLogs } from '../src/ops'
+import { runExec, status, tailLogs, ps, service } from '../src/ops'
 
 // 受控的 exec：按命令返回 stdout/退出码
 const h = vi.hoisted(() => ({
@@ -128,5 +128,65 @@ describe('tailLogs', () => {
         const r = await tailLogs('/var/log/app.log', { connect: conn }, { lines: Number('abc') })
         expect(r.lines).toEqual(['x'])
         expect(h.state.execs[0]).toContain('tail -n 200')
+    })
+})
+
+describe('ps', () => {
+    const PS_OUT = [
+        '  PID  PPID USER %CPU %MEM   RSS COMMAND',
+        '    1     0 root  0.0  0.1  1024 /sbin/init',
+        '  900     1 node 12.0  5.0 88000 node /app/server.js',
+    ].join('\n')
+
+    it('采集 ps -A 并结构化', async () => {
+        h.state.responses = [{ match: 'ps -A', stdout: PS_OUT }]
+        const r = await ps({ connect: conn })
+        expect(r.ok).toBe(true)
+        expect(r.processes).toHaveLength(2)
+        expect(r.processes[1]).toMatchObject({ pid: 900, user: 'node', command: 'node /app/server.js' })
+        expect(h.state.execs[0]).toBe('ps -A -o pid,ppid,user,pcpu,pmem,rss,args')
+    })
+
+    it('grep 在客户端按命令行子串过滤', async () => {
+        h.state.responses = [{ match: 'ps -A', stdout: PS_OUT }]
+        const r = await ps({ connect: conn }, { grep: 'server.js' })
+        expect(r.processes).toHaveLength(1)
+        expect(r.processes[0].pid).toBe(900)
+    })
+})
+
+describe('service', () => {
+    it('status 只读：无需 --yes，构造 systemctl status 命令', async () => {
+        h.state.responses = [{ match: 'systemctl status', stdout: 'active\n' }]
+        const r = await service('nginx', 'status', { connect: conn, audit: false })
+        expect(r.ok).toBe(true)
+        expect(r.command).toBe("systemctl status --no-pager 'nginx'")
+        expect(h.state.execs[0]).toBe("systemctl status --no-pager 'nginx'")
+    })
+
+    it('写动作缺 --yes：抛错且不建立连接', async () => {
+        await expect(service('nginx', 'restart', { connect: conn, audit: false })).rejects.toThrow(/--yes/)
+        expect(h.state.execs).toHaveLength(0)
+    })
+
+    it('写动作带 yes：执行并按退出码定 ok', async () => {
+        h.state.responses = [{ match: 'systemctl restart', stdout: '', code: 0 }]
+        const r = await service('nginx', 'restart', { connect: conn, audit: false }, { yes: true })
+        expect(r.ok).toBe(true)
+        expect(h.state.execs[0]).toBe("systemctl restart 'nginx'")
+    })
+
+    it('命令退出码非零：ok=false 但不抛（诊断原语返回结构化结果）', async () => {
+        h.state.responses = [{ match: 'systemctl status', stdout: '', code: 4 }]
+        const r = await service('nope', 'status', { connect: conn, audit: false })
+        expect(r.ok).toBe(false)
+        expect(r.code).toBe(4)
+    })
+
+    it('docker reload 不支持：抛错且不建立连接', async () => {
+        await expect(
+            service('redis', 'reload', { connect: conn, audit: false }, { manager: 'docker', yes: true })
+        ).rejects.toThrow()
+        expect(h.state.execs).toHaveLength(0)
     })
 })

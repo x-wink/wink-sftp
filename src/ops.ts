@@ -1,8 +1,9 @@
 import { withSession } from './session'
 import { resolveConfig } from './config'
 import { Logger } from './logger'
+import { recordAudit } from './audit'
 import { shellQuote } from './exec'
-import { RemoteCommandError } from './errors'
+import { ConfigError, RemoteCommandError } from './errors'
 import type { RunOption } from './core'
 
 /** `exec` 远程执行结果：退出码非零也作为结构化结果返回（不抛），便于 agent 诊断。 */
@@ -175,5 +176,156 @@ export const tailLogs = async (
         const out = r.stdout.split(/\r?\n/)
         if (out.length && out[out.length - 1] === '') out.pop()
         return { ok: true, path: remotePath, lines: out }
+    })
+}
+
+/** 单个进程信息（`ps` 一行解析）。 */
+export interface ProcessInfo {
+    /** 进程号。 */
+    pid: number
+    /** 父进程号。 */
+    ppid: number
+    /** 属主用户名。 */
+    user: string
+    /** CPU 占用百分比。 */
+    cpu: number
+    /** 内存占用百分比。 */
+    mem: number
+    /** 常驻内存（KB）。 */
+    rssKb: number
+    /** 完整命令行。 */
+    command: string
+}
+
+/** `ps` 结果。 */
+export interface PsResult {
+    ok: boolean
+    /** 进程列表（已按可选 grep 过滤）。 */
+    processes: ProcessInfo[]
+}
+
+/**
+ * 解析 `ps -A -o pid,ppid,user,pcpu,pmem,rss,args` 输出：跳过表头、丢弃无法解析行。
+ * 末列 `args` 为完整命令行（可含空格），用贪婪 `(.+)` 吃掉行尾。
+ */
+export const parsePs = (text: string): ProcessInfo[] => {
+    const out: ProcessInfo[] = []
+    for (const line of text.trim().split(/\r?\n/).slice(1)) {
+        const m = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s+(.+)$/)
+        if (!m) continue
+        out.push({
+            pid: Number(m[1]),
+            ppid: Number(m[2]),
+            user: m[3],
+            cpu: Number(m[4]),
+            mem: Number(m[5]),
+            rssKb: Number(m[6]),
+            command: m[7].trim(),
+        })
+    }
+    return out
+}
+
+/**
+ * 远程进程快照：一次 `ps` 采集所有进程并结构化，可选 `grep` 按命令行子串过滤。
+ * 过滤在**客户端**做（而非远程 `| grep`）——避免 grep 进程自身入列与 shell 转义复杂度。
+ * 需要 connect，不需要 local/remote。
+ */
+export const ps = async (options?: RunOption, { grep }: { grep?: string } = {}): Promise<PsResult> => {
+    const config = resolveConfig(options, { requireLocal: false, requireRemote: false })
+    const logger = new Logger({ debug: config.debug, json: config.json })
+    // `-A -o` 在 GNU(Linux) 与 BSD(macOS) ps 上语义一致（裸 `-e` 在 macOS 含义不同，不可用）
+    return withSession(config.connect, logger, async (session) => {
+        const r = await session.exec('ps -A -o pid,ppid,user,pcpu,pmem,rss,args')
+        const all = parsePs(r.stdout)
+        return { ok: true, processes: grep ? all.filter((p) => p.command.includes(grep)) : all }
+    })
+}
+
+/** 支持的服务管理器。 */
+export type ServiceManager = 'systemd' | 'pm2' | 'docker'
+/** 服务动作：`status` 只读，其余为写操作（需 `--yes`）。 */
+export type ServiceAction = 'status' | 'start' | 'stop' | 'restart' | 'reload'
+
+/** 受支持的服务管理器枚举（CLI 校验用）。 */
+export const SERVICE_MANAGERS: ServiceManager[] = ['systemd', 'pm2', 'docker']
+/** 受支持的服务动作枚举（CLI 校验用）。 */
+export const SERVICE_ACTIONS: ServiceAction[] = ['status', 'start', 'stop', 'restart', 'reload']
+/** 写操作动作集合（需确认 + 审计）。 */
+const WRITE_ACTIONS: Set<ServiceAction> = new Set(['start', 'stop', 'restart', 'reload'])
+
+/** 该动作是否为写操作（`status` 之外皆为写）。 */
+export const isWriteAction = (action: ServiceAction): boolean => WRITE_ACTIONS.has(action)
+
+/** `service` 结果。 */
+export interface ServiceResult {
+    /** 退出码是否为 0。 */
+    ok: boolean
+    /** 服务/容器名。 */
+    service: string
+    /** 执行的动作。 */
+    action: ServiceAction
+    /** 使用的服务管理器。 */
+    manager: ServiceManager
+    /** 实际执行的远程命令。 */
+    command: string
+    stdout: string
+    stderr: string
+    code: number
+}
+
+/**
+ * 构造服务管理命令（纯函数，便于单测）。服务名经 {@link shellQuote} 防注入。
+ * - systemd：`systemctl <action> <name>`（status 用 `systemctl status --no-pager`）
+ * - pm2：`pm2 <action> <name>`（status 用 `pm2 describe`）
+ * - docker：start/stop/restart 直接映射，status 用 `docker ps --filter name=`；**不支持 reload**
+ */
+export const buildServiceCommand = (manager: ServiceManager, action: ServiceAction, name: string): string => {
+    const n = shellQuote(name)
+    switch (manager) {
+        case 'systemd':
+            return action === 'status' ? `systemctl status --no-pager ${n}` : `systemctl ${action} ${n}`
+        case 'pm2':
+            return action === 'status' ? `pm2 describe ${n}` : `pm2 ${action} ${n}`
+        case 'docker':
+            if (action === 'status') return `docker ps --filter name=${n}`
+            if (action === 'reload') throw new ConfigError('docker 不支持 reload 动作（用 restart）')
+            return `docker ${action} ${n}`
+    }
+}
+
+/**
+ * 服务/进程管理：对远程服务执行 status/start/stop/restart/reload。
+ *
+ * **读写分离**：`status` 只读、默认放行；写动作（start/stop/restart/reload）须 `yes=true`
+ * （CLI `--yes`）确认，否则抛 {@link ConfigError}；写动作成功与否都记一条本地审计。
+ * 命令退出码非零**不抛**，作为 `ok=false` 的结构化结果返回（便于 agent 诊断）。
+ * 需要 connect，不需要 local/remote。
+ */
+export const service = async (
+    name: string,
+    action: ServiceAction,
+    options?: RunOption,
+    { manager = 'systemd', yes = false }: { manager?: ServiceManager; yes?: boolean } = {}
+): Promise<ServiceResult> => {
+    const write = isWriteAction(action)
+    if (write && !yes) {
+        throw new ConfigError(`服务写操作 ${action} 需 --yes 确认（只读 status 无需）`)
+    }
+    // 命令构造可能抛（如 docker reload）——置于连接之前，避免无谓建连
+    const command = buildServiceCommand(manager, action, name)
+    const config = resolveConfig(options, { requireLocal: false, requireRemote: false })
+    const logger = new Logger({ debug: config.debug, json: config.json })
+    return withSession(config.connect, logger, async (session) => {
+        let r: { stdout: string; stderr: string; code: number }
+        try {
+            r = await session.exec(command)
+        } catch (e) {
+            if (e instanceof RemoteCommandError && e.result) r = e.result
+            else throw e // 连接/无法启动等仍上抛
+        }
+        const ok = r.code === 0
+        if (write) recordAudit(config, logger, `service:${action}`, ok, { service: name, manager, command })
+        return { ok, service: name, action, manager, command, stdout: r.stdout, stderr: r.stderr, code: r.code }
     })
 }

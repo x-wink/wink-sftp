@@ -21,8 +21,18 @@ export type {
 } from './core'
 export { guard, backupRemote, restoreRemote, existsRemote } from './guard'
 export type { GuardOptions, GuardResult } from './guard'
-export { runExec, status, tailLogs } from './ops'
-export type { ExecRunResult, StatusResult, LogsResult, DiskUsage } from './ops'
+export { runExec, status, tailLogs, ps, service } from './ops'
+export type {
+    ExecRunResult,
+    StatusResult,
+    LogsResult,
+    DiskUsage,
+    PsResult,
+    ProcessInfo,
+    ServiceResult,
+    ServiceManager,
+    ServiceAction,
+} from './ops'
 export { edit } from './edit'
 export type { EditOptions, EditResult } from './edit'
 export { resolveConfig, loadConfigFile } from './config'
