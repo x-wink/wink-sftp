@@ -1,3 +1,19 @@
+## v1.3.1
+
+[compare changes](https://github.com/x-wink/wink-sftp/compare/v1.3.0...v1.3.1)
+
+### 🩹 Fixes
+
+- **cli:** 修复子命令连接选项失效与忽略目录残留，新增端到端测试 ([62443ef](https://github.com/x-wink/wink-sftp/commit/62443ef))
+
+### 💅 Refactors
+
+- **core:** 重命名增量分支局部变量避免遮蔽外层 remote ([55fc72f](https://github.com/x-wink/wink-sftp/commit/55fc72f))
+
+### ❤️ Contributors
+
+- Xwink <1041367524@qq.com>
+
 ## v1.3.0
 
 [compare changes](https://github.com/x-wink/wink-sftp/compare/v1.2.0...v1.3.0)
