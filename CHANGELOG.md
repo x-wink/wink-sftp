@@ -1,3 +1,19 @@
+## v3.0.0
+
+[compare changes](https://github.com/x-wink/wink-sftp/compare/v2.5.0...v3.0.0)
+
+### 🚀 Enhancements
+
+- Provision 守护式写配置文件（configure，复用 guard） ([594088c](https://github.com/x-wink/wink-sftp/commit/594088c))
+
+### 🩹 Fixes
+
+- **provision:** 修复发版前 code-review 发现的 configure 边角问题 ([966af35](https://github.com/x-wink/wink-sftp/commit/966af35))
+
+### ❤️ Contributors
+
+- 向文可 <1041367524@qq.com>
+
 ## v2.5.0
 
 [compare changes](https://github.com/x-wink/wink-sftp/compare/v2.4.0...v2.5.0)
