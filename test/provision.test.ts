@@ -82,6 +82,10 @@ describe('parseConfigs（守护式写配置声明）', () => {
         expect(() => parseConfigs({ configure: [{ file: './a', remote: '/x', validate: 1 }] })).toThrow(/validate/)
         expect(() => parseConfigs({ configure: [{ file: './a', remote: '/x', reload: true }] })).toThrow(/reload/)
     })
+    it('file/remote 前后空白被裁剪（避免带空格路径的迷惑性失败）', () => {
+        const specs = parseConfigs({ configure: [{ file: '  ./a.conf  ', remote: '  /etc/a.conf  ' }] })
+        expect(specs[0]).toEqual({ file: './a.conf', remote: '/etc/a.conf' })
+    })
 })
 
 describe('recipe: nodejs (nvm)', () => {

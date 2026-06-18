@@ -87,7 +87,7 @@ export const parseConfigs = (options: ComponentOptions): ConfigSpec[] => {
         if (typeof o.remote !== 'string' || !o.remote.trim()) {
             throw new ConfigError(`configure[${i}] 缺少 remote（远程目标）`)
         }
-        const spec: ConfigSpec = { file: o.file, remote: o.remote }
+        const spec: ConfigSpec = { file: o.file.trim(), remote: o.remote.trim() }
         if (o.validate !== undefined) {
             if (typeof o.validate !== 'string') throw new ConfigError(`configure[${i}].validate 必须是字符串`)
             spec.validate = o.validate
@@ -586,14 +586,13 @@ export const provision = async (
     if (!config.dryRun && !yes) {
         throw new ConfigError('provision 是写操作，需 --dry-run 预演或 --yes 确认执行')
     }
-    // 守护式写配置：实跑前预检本地源文件存在（fail-fast，避免连上后才发现缺文件）。
-    // 预演不强求文件就位（dry-run 只出计划、不写）。
-    if (!config.dryRun) {
-        for (const sel of selected) {
-            for (const c of parseConfigs(sel.options)) {
-                const localFile = resolveLocal(c.file)
-                if (!fs.existsSync(localFile)) throw new ConfigError(`configure 本地源文件不存在：${localFile}`)
-            }
+    // 守护式写配置预检（连接前 fail-fast）：configure 形态校验对预演与实跑都做（纯静态错误不该连上才暴露）；
+    // 本地源文件存在性只在实跑校验（dry-run 只出计划、不写，不强求文件就位）。
+    for (const sel of selected) {
+        for (const c of parseConfigs(sel.options)) {
+            if (config.dryRun) continue
+            const localFile = resolveLocal(c.file)
+            if (!fs.existsSync(localFile)) throw new ConfigError(`configure 本地源文件不存在：${localFile}`)
         }
     }
     const logger = new Logger({ debug: config.debug, json: config.json })

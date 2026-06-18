@@ -294,7 +294,7 @@ npx wink-sftp provision nodejs docker -c ./sftp.yaml --yes
 - **安全模型**：`provision` 是写操作——必须 `--dry-run`（预演）或 `--yes`（确认）二选一，二者都没有时直接拒绝。
 - **幂等**：先检测（`node --version` 等）再收敛；已满足目标版本则不执行任何步骤。版本按**点分前缀**匹配（目标 `20` 满足 `20.11.0`）。
 - **结构化结果**：`{ok,dryRun,components:[{component,desired,detected,satisfied,planned,executed,plannedConfigs,configured,ok}]}`；步骤退出码非零作 `ok=false`、停在首个失败步骤、不报错。实跑记一条本地审计。
-- **守护式写配置（`configure`）**：任一组件可声明 `configure: [{ file, remote, validate?, reload? }]`，安装/已满足后逐条经 `guard` 落地（备份→写→校验→reload→失败回滚），与 `edit` 同一流水线；本地源经 SFTP、明文不进命令。实跑前预检本地源文件存在（缺则报错、不连接）；预演（`--dry-run`）只在 `plannedConfigs` 出计划、不写、不要求文件就位。任一文件失败即停（已回滚到备份）。
+- **守护式写配置（`configure`）**：任一组件可声明 `configure: [{ file, remote, validate?, reload? }]`，安装/已满足后**按数组顺序逐条**经 `guard` 落地（备份→写→校验→reload→失败回滚），与 `edit` 同一流水线；本地源经 SFTP、明文不进命令。实跑前预检本地源文件存在（缺则报错、不连接），形态非法连接前即报错（预演也校验）；预演（`--dry-run`）只在 `plannedConfigs` 出计划、不写、不要求文件就位。**回滚是逐条粒度**：某条失败只回滚该条并停在该条，**此前已成功条目（含其 reload）不撤销**——多文件互相引用时把被依赖文件排前面，或只在最后一条挂 `validate`/`reload`。
 - **边界**：面向固定栈的策划式 recipes（Ubuntu/Debian 优先），非通用配置管理引擎。原生包安装（nginx/redis/mysql native）需以 **root 或免密 sudo** 用户连接。docker 模式用固定容器名（`wink-redis`/`wink-mysql`），同机已有同名容器会冲突。
 - **secret 不外泄**：含密码的步骤（如 mysql `rootPassword`）在 `--json` / 审计里**自动脱敏**（密码替换为星号），明文只用于实际执行。
 

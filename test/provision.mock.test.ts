@@ -284,4 +284,11 @@ describe('provision 守护式写配置（configure）', () => {
         ).rejects.toThrow(/本地源文件不存在/)
         expect(h.state.execs).toHaveLength(0)
     })
+
+    it('configure 形态非法 → 连接前就报错（预演也校验，不建立连接）', async () => {
+        await expect(
+            provision(base({ nginx: { version: 'latest', configure: 'not-an-array' } }, { dryRun: true }))
+        ).rejects.toThrow(/数组/)
+        expect(h.state.execs).toHaveLength(0)
+    })
 })

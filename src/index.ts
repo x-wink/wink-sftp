@@ -230,7 +230,8 @@ const renderProvision = (r: ProvisionResult): void => {
     for (const c of r.components) {
         const cur = c.detected.installed ? c.detected.version : '未安装'
         if (c.satisfied) {
-            console.error(`  ✓ ${c.component}：已满足（目标 ${c.desired}，当前 ${cur}）`)
+            // 已满足但仍可能有 configure 写失败（ok=false）：标志位据 c.ok 取，避免「已满足」误显成功
+            console.error(`  ${c.ok ? '✓' : '✗'} ${c.component}：已满足（目标 ${c.desired}，当前 ${cur}）`)
         } else {
             const mark = c.ok ? '↻' : '✗'
             console.error(`  ${mark} ${c.component}：目标 ${c.desired}，当前 ${cur}`)
