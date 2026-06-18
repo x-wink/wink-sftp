@@ -52,8 +52,11 @@ pnpm run typecheck  # tsc --noEmit
 pnpm run lint       # oxlint --fix（lint:check 不修复，用于 CI）
 pnpm run format     # oxfmt .（format:check 用于 CI）
 pnpm run build      # tsc -emitDeclarationOnly + ncc 打两份：CLI → dist/index.js、库入口 → dist/lib/index.js
-pnpm run release    # build + changelogen --release --push（改版本/CHANGELOG/commit/tag/push）；发布与 GitHub Release 由 tag 触发 CI 完成
+pnpm run release    # build + changelogen --release + git push（改版本/CHANGELOG/commit/打 tag，仅推 main，**不推 tag**）
+pnpm run release:tag # 待 main 完整门禁绿后再推 tag（git push --follow-tags），由 tag 触发发布与 GitHub Release
 ```
+
+**发布流程（必须分两步，先门禁后发版）**：① `pnpm run release` 本地改版本/CHANGELOG/提交/打 tag 并**只推 main**；② 等 `ci.yml`（lint/format/typecheck/test/build/e2e/commitlint，Node 22/24 + Node 18 冒烟）**全部绿**后，再 `pnpm run release:tag` 推送 tag 触发 `release.yml` 发布 npm + GitHub Release。**绝不在 main 门禁通过前推 tag**——否则可能发布出门禁未过的版本。
 
 仓库使用 **pnpm**（`.npmrc` 设 `node-linker=hoisted`，利于 ncc 打包 ssh2 原生件）。构建已不再需要 `--openssl-legacy-provider`。
 
