@@ -1,12 +1,12 @@
 import { Client } from 'ssh2'
 import type { ConnectConfig, SFTPWrapper } from 'ssh2'
-import fs from 'node:fs'
 import { scan } from './scanner'
 import { resolveLocal, remoteIsDir, buildRemoteTarget, buildRemoteDir, findFlatCollisions } from './pathmap'
 import { execCommand, shellQuote } from './exec'
 import { mapPool, DEFAULT_CONCURRENCY } from './pool'
 import { withRetry, DEFAULT_RETRIES } from './retry'
-import { appendAudit, defaultAuditPath } from './audit'
+import { appendAudit } from './audit'
+import { resolveConfig } from './config'
 import { Logger } from './logger'
 import { ConfigError, ConnectionError, TransferError } from './errors'
 
@@ -43,7 +43,7 @@ export interface RunOption {
     auditLog?: string
 }
 
-interface ResolvedConfig {
+export interface ResolvedConfig {
     connect: ConnectConfig
     local: string
     remote: string
@@ -80,48 +80,6 @@ export interface DeployResult {
 }
 
 const DEFAULT_MODE = 0o777
-
-/** 合并配置文件 / CLI 选项并校验，返回归一化配置。校验失败抛 {@link ConfigError}。 */
-const resolveConfig = (options: RunOption = {}): ResolvedConfig => {
-    const { config = false } = options
-    // json / dryRun / debug 是调用级开关，即便用 -c 配置文件也应生效（叠加在文件之上）。
-    const cliDebug = options.debug ?? false
-    const cliJson = options.json ?? false
-    const cliDryRun = options.dryRun ?? false
-    let raw: RunOption = options
-    if (config) {
-        try {
-            raw = JSON.parse(String(fs.readFileSync(resolveLocal(config)))) as RunOption
-        } catch (e) {
-            throw new ConfigError(`解析配置文件失败：${config}`, { cause: e })
-        }
-    }
-    const connect = raw.connect ?? {}
-    // 密码登录或密钥登录二选一：privateKey / agent 任一存在即可，允许密码留空
-    const hasAuth = Boolean(connect.password) || Boolean(connect.privateKey) || Boolean(connect.agent)
-    if (!connect.host || !connect.port || !connect.username || !hasAuth || !raw.local || !raw.remote) {
-        throw new ConfigError(
-            '配置至少包含以下属性：connect.host、connect.port、connect.username、' +
-                'connect.password 或 connect.privateKey（或 connect.agent）、local、remote'
-        )
-    }
-    const debug = raw.debug ?? cliDebug
-    const sftpOptions: SftpOption = { ...raw.sftpOptions }
-    sftpOptions.debug ??= debug
-    return {
-        connect,
-        local: raw.local,
-        remote: raw.remote,
-        sftpOptions,
-        debug,
-        json: (raw.json ?? false) || cliJson,
-        dryRun: (raw.dryRun ?? false) || cliDryRun,
-        // 调用级开关优先于配置文件：CLI 显式 --no-audit（options.audit === false）必须生效，
-        // 否则取配置文件值、再默认开启；auditLog 同理由 CLI 覆盖文件。
-        audit: options.audit === false ? false : (raw.audit ?? true),
-        auditLog: options.auditLog ?? raw.auditLog ?? defaultAuditPath(),
-    }
-}
 
 /** 校验 clear 目标路径安全：非空、非 `/`、至少含一个有效路径段。 */
 const assertSafeClearTarget = (remote: string): void => {

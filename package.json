@@ -55,11 +55,14 @@
     },
     "dependencies": {
         "commander": "^15.0.0",
-        "ssh2": "^1.17.0"
+        "js-yaml": "^4.2.0",
+        "ssh2": "^1.17.0",
+        "zod": "^4.4.3"
     },
     "devDependencies": {
         "@commitlint/cli": "^21.0.2",
         "@commitlint/config-conventional": "^21.0.2",
+        "@types/js-yaml": "^4.0.9",
         "@types/node": "^25.9.3",
         "@types/ssh2": "^1.15.5",
         "@vercel/ncc": "^0.44.0",
