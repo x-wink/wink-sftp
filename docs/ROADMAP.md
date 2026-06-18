@@ -6,16 +6,19 @@
 
 ## 进度追踪
 
-> 图例：✅ 已完成　🚧 进行中　⬜ 计划中。条目级进度见各 Phase 内的清单复选框。
+> 图例：✅ 已完成　🚧 进行中　⬜ 计划中　🔄 持续更新（贯穿各版本、随命令面扩展）。条目级进度见各 Phase 内的清单复选框。
 
-| Phase   | 版本 | 主题                   | 状态      |
-| ------- | ---- | ---------------------- | --------- |
-| Phase 1 | v1.1 | 稳定与安全加固（止血） | ✅ 已完成 |
-| Phase 2 | v1.2 | 健壮性与工程化（加固） | 🚧 进行中 |
-| Phase 3 | v1.3 | 功能增强（提效）       | ✅ 已完成 |
-| Phase 4 | v2.0 | 能力扩展（编排）       | ⬜ 计划中 |
-| Phase 5 | v3.0 | 平台化（单机）         | ⬜ 计划中 |
-| Phase 6 | v4.0 | 规模化与可视化         | ⬜ 计划中 |
+| Phase   | 版本       | 主题                      | 状态        |
+| ------- | ---------- | ------------------------- | ----------- |
+| Phase 1 | v1.1       | 稳定与安全加固（止血）    | ✅ 已完成   |
+| Phase 2 | v1.2       | 健壮性与工程化（加固）    | ✅ 已完成   |
+| Phase 3 | v1.3       | 功能增强（提效）          | ✅ 已完成   |
+| Phase 4 | v2.0       | 能力扩展（编排）          | ⬜ 计划中   |
+| Phase 5 | v3.0       | 平台化（单机）            | ⬜ 计划中   |
+| Phase 6 | v4.0       | 规模化与可视化            | ⬜ 计划中   |
+| 专项    | 贯穿各版本 | 让 AI Agent 可调用        | 🔄 持续更新 |
+
+> 专项「让 AI Agent 可调用」（详见末尾同名章节）不绑定单一版本：CLI 硬化随 Phase 1 落地、首个 deploy Skill 随 v1.2 交付并随包分发，Skill 集与 `skill install` 自动安装随后续子命令（status/logs/provision…）持续扩充——故状态为持续更新而非一次性完工。
 
 ## 长期愿景
 
@@ -179,9 +182,11 @@ stack:
 
 ---
 
-## 专项：让 AI Agent 可调用
+## 专项：让 AI Agent 可调用 🔄
 
 > 决策：**主推 Skill + 护栏做进 CLI**，面向 Claude Code / Claude 生态，暂不引入 MCP。
+>
+> **状态：持续更新。** 地基（CLI 硬化）随 Phase 1 完成、首个 deploy Skill 随 v1.2 交付并随包分发；Skill 集与 `skill install` 自动安装随后续子命令扩充，不绑定单一版本。
 
 `wink-sftp` 本质是 CLI，agent 本就擅长经由 shell 调用。关键不在「用什么协议封装」，而在「agent 调用时能否可靠判断成败、且不会误删生产」——这属于工具自身能力，做进 CLI 本身。
 
@@ -195,7 +200,9 @@ stack:
 └── scripts/            # 可选：固化 dry-run → 确认 → 真跑 流程
 ```
 
-**分发给最终用户**：Skill 既供本仓库贡献者使用，也随 npm 包发布（`package.json#files` 含 `.claude/skills`）。**现状（v1.2）**：用户从 `node_modules/@xwink/sftp/.claude/skills/` 手动拷贝到自己项目的 `.claude/skills/`，README 给出指引。**规划**：在 Phase 5 子命令体系内提供 `wink-sftp skill install [name]`，自动把随包 Skill 落到用户项目 `.claude/skills/`（或 `~/.claude/skills/`），免去手动拷贝；与 status/logs/provision 等子命令一并扩展可安装的 Skill 集。
+**现状 Skill 集**：`deploy`（部署，覆盖增量 / `.winksftpignore` / 多环境 / YAML / secrets）+ `pull`（远程只读：`pull` 下载 + `ls` 浏览）。随子命令（status/logs/provision…）继续扩充。
+
+**分发给最终用户**：Skill 既供本仓库贡献者使用，也随 npm 包发布（`package.json#files` 含 `.claude/skills`）。**现状**：用户从 `node_modules/@xwink/sftp/.claude/skills/` 手动拷贝到自己项目的 `.claude/skills/`，README 给出指引。**规划**：在 Phase 5 子命令体系内提供 `wink-sftp skill install [name]`，自动把随包 Skill 落到用户项目 `.claude/skills/`（或 `~/.claude/skills/`），免去手动拷贝；与 status/logs/provision 等子命令一并扩展可安装的 Skill 集。
 
 **不用 MCP**：MCP 收益主要在跨平台与代码级护栏；护栏既已做进 CLI（任何调用方都安全），MCP 优势被削弱。待出现跨平台 agent 需求时，可基于 `SshSession` 编程式 API 低成本封装。
 

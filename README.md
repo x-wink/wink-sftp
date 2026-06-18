@@ -40,7 +40,7 @@
 - 🙈 自动跳过隐藏文件，支持按路径排除与 `.winksftpignore`（gitignore 风格 glob）
 - ⚡ 受限并发传输 + 单文件失败自动重试，扛得住数百文件与网络抖动
 - 📋 写操作本地审计日志（何时 / 哪台 / 什么动作 / 结果）
-- 🔍 `--dry-run` 预演（不连接、不落地）与 `--json` 机器可读输出，并提供 deploy Skill 供 Claude 直接调用
+- 🔍 `--dry-run` 预演（不连接、不落地）与 `--json` 机器可读输出，并提供 deploy / pull 两个 Skill 供 Claude 直接调用
 - 🔢 分类退出码，失败可被脚本 / CI 捕获
 - 🔒 远程命令参数自动转义防注入、调试日志对密码/密钥脱敏、`clear` 危险路径护栏
 
@@ -330,15 +330,22 @@ npx wink-sftp -c ./sftp.json --json | jq '.transferred'
 
 ### Claude Code Skill
 
-本包随附一个 **deploy Skill**，封装「先预演 → 人工确认 → 真跑 → 按退出码/`ok`/`failed[]` 判定」的安全部署流程。在你自己的项目里启用它，让 Claude 直接按规约调用 `wink-sftp`：
+本包随附两个 Skill，让 Claude 直接按规约调用 `wink-sftp`：
+
+- **deploy** — 部署上传，封装「先预演 → 人工确认 → 真跑 → 按退出码/`ok`/`failed[]` 判定」的安全流程；覆盖增量、`.winksftpignore`/`ignore`、多环境 `--env`、YAML、`${ENV_VAR}` secrets。
+- **pull** — 远程只读/下载，承载 `pull`（下载文件/目录）与 `ls`（浏览远程目录）。
+
+在你自己的项目里启用：把随包发布的 Skill 拷到项目的 `.claude/skills/`：
 
 ```bash
-# 在你的项目根目录执行：把随包发布的 Skill 拷到项目的 .claude/skills/
-mkdir -p .claude/skills/deploy
-cp node_modules/@xwink/sftp/.claude/skills/deploy/SKILL.md .claude/skills/deploy/
+# 在你的项目根目录执行
+for s in deploy pull; do
+  mkdir -p ".claude/skills/$s"
+  cp "node_modules/@xwink/sftp/.claude/skills/$s/SKILL.md" ".claude/skills/$s/"
+done
 ```
 
-之后让 Claude「用 wink-sftp 部署到服务器」即可触发；它会先 `--dry-run --json` 给你确认、危险操作（如 `--sftp-clear`）显式征求同意，再真跑并按结构化结果回报。
+之后让 Claude「用 wink-sftp 部署到服务器」「从服务器拉取 dist」「列出远程目录」即可触发对应 Skill；部署会先 `--dry-run --json` 给你确认、危险操作（如 `--sftp-clear`）显式征求同意，再真跑并按结构化结果回报。
 
 > 未来计划提供 `wink-sftp skill install` 子命令免去手动拷贝，详见路线图。
 
