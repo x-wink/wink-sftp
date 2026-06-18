@@ -1,5 +1,6 @@
 import { Client } from 'ssh2'
-import type { ConnectConfig, SFTPWrapper } from 'ssh2'
+import type { ConnectConfig, SFTPWrapper, Stats } from 'ssh2'
+import fs from 'node:fs'
 import { scan, loadIgnorePatterns } from './scanner'
 import { resolveLocal, remoteIsDir, buildRemoteTarget, buildRemoteDir, findFlatCollisions } from './pathmap'
 import { execCommand, shellQuote } from './exec'
@@ -17,6 +18,8 @@ export interface SftpOption {
     flat?: boolean
     clear?: boolean
     override?: boolean
+    /** 增量传输：按 size + mtime 比对远程文件，仅传变更项（优先级高于 override）。 */
+    incremental?: boolean
     debug?: boolean
     mode?: number
     ignoreHidden?: boolean
@@ -76,7 +79,7 @@ export interface DeployResult {
     remote: string
     /** 已传输（或预演将传输）的远程目标。 */
     transferred: string[]
-    /** 已跳过（已存在且未开启 override）的远程目标。 */
+    /** 已跳过（已存在且未开启 override，或增量比对未变更）的远程目标。 */
     skipped: string[]
     /** 传输失败的目标及原因。 */
     failed: { target: string; error: string }[]
@@ -116,6 +119,19 @@ const remoteExists = async (client: Client, target: string): Promise<boolean> =>
         return false
     }
 }
+
+/** 取远程文件 size 与 mtime（秒）；不存在或出错返回 null，绝不抛错。 */
+const remoteStat = (sftp: SFTPWrapper, target: string): Promise<{ size: number; mtime: number } | null> =>
+    new Promise((resolve) => {
+        sftp.stat(target, (err, stats: Stats) => resolve(err ? null : { size: stats.size, mtime: stats.mtime }))
+    })
+
+/**
+ * 增量判定：远程已存在、size 相同、且远程 mtime ≥ 本地 mtime（秒）时视为未变更。
+ * fastPut 不保留本地 mtime，远程 mtime 即上传时刻，故未改动的文件在重跑时必然满足。
+ */
+const isUnchanged = (local: fs.Stats, remote: { size: number; mtime: number }): boolean =>
+    remote.size === local.size && remote.mtime >= Math.floor(local.mtimeMs / 1000)
 
 const fastPut = (sftp: SFTPWrapper, file: string, target: string, mode: number): Promise<void> =>
     new Promise((resolve, reject) => {
@@ -213,7 +229,16 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
     // 受限并发传输：同一时刻最多 concurrency 个文件在飞
     await mapPool(targets, concurrency, async ({ file, target }) => {
         try {
-            if (!opts.override && (await remoteExists(client, target))) {
+            // 增量优先：远程未变更则跳过；否则覆盖传输（不再看 override）
+            if (opts.incremental) {
+                const remote = await remoteStat(sftp, target)
+                if (remote && isUnchanged(fs.statSync(file), remote)) {
+                    logger.debug('增量比对未变更，跳过：' + target)
+                    skipped.push(target)
+                    progress('跳过', target)
+                    return
+                }
+            } else if (!opts.override && (await remoteExists(client, target))) {
                 logger.debug('文件已存在，跳过：' + target)
                 skipped.push(target)
                 progress('跳过', target)

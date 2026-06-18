@@ -30,6 +30,7 @@ const sftpOptionsSchema = z.object({
     flat: z.boolean().optional(),
     clear: z.boolean().optional(),
     override: z.boolean().optional(),
+    incremental: z.boolean().optional(),
     debug: z.boolean().optional(),
     mode: z.number().optional(),
     ignoreHidden: z.boolean().optional(),

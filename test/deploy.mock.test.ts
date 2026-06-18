@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
         execs: [] as string[],
         fastPuts: [] as string[],
         existing: new Set<string>(),
+        /** target → 远程 stat（增量比对用）：size 与 mtime（秒）。 */
+        remoteStats: new Map<string, { size: number; mtime: number }>(),
         /** target → 还需失败的次数（Infinity 表示永久失败）。 */
         failRemaining: new Map<string, number>(),
         ended: false,
@@ -58,6 +60,11 @@ vi.mock('ssh2', () => {
                         done()
                     }
                 },
+                stat(target: string, done: (err: unknown, stats?: unknown) => void) {
+                    const s = h.state.remoteStats.get(target)
+                    if (s) done(null, s)
+                    else done(new Error('no such file'))
+                },
             })
         }
     }
@@ -72,6 +79,7 @@ beforeEach(() => {
     h.state.execs = []
     h.state.fastPuts = []
     h.state.existing = new Set()
+    h.state.remoteStats = new Map()
     h.state.failRemaining = new Map()
     h.state.ended = false
     localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wink-deploy-'))
@@ -137,6 +145,26 @@ describe('deploy（mock ssh2）', () => {
         expect(r.ok).toBe(false)
         expect(r.failed.map((f) => f.target)).toEqual(['/remote/a.txt'])
         expect(r.transferred.toSorted()).toEqual(['/remote/b.txt', '/remote/sub/c.txt'])
+    })
+
+    it('增量：远程未变更（size 相同、mtime 较新）则跳过，不再 fastPut', async () => {
+        const fresh = { size: 1, mtime: 9999999999 } // 1 字节、mtime 远晚于本地
+        h.state.remoteStats.set('/remote/a.txt', fresh)
+        h.state.remoteStats.set('/remote/b.txt', fresh)
+        h.state.remoteStats.set('/remote/sub/c.txt', fresh)
+        const r = await baseRun({ incremental: true })
+        expect(r.skipped.toSorted()).toEqual(['/remote/a.txt', '/remote/b.txt', '/remote/sub/c.txt'])
+        expect(r.transferred).toEqual([])
+        expect(h.state.fastPuts).toEqual([])
+    })
+
+    it('增量：size 不同则覆盖传输，未变更项仍跳过', async () => {
+        h.state.remoteStats.set('/remote/a.txt', { size: 999, mtime: 9999999999 }) // size 不同 → 变更
+        h.state.remoteStats.set('/remote/b.txt', { size: 1, mtime: 9999999999 }) // 未变更
+        // c.txt 远程不存在（stat 返回 null）→ 传输
+        const r = await baseRun({ incremental: true })
+        expect(r.transferred.toSorted()).toEqual(['/remote/a.txt', '/remote/sub/c.txt'])
+        expect(r.skipped).toEqual(['/remote/b.txt'])
     })
 
     it('beforeRunCommand 在扫描/建目录之前执行', async () => {

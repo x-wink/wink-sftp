@@ -48,6 +48,7 @@ program
     .option('-f --sftp-flat', '是否扁平化目录（本地文件夹下任意深度的文件都直接传输到远程文件夹下），默认为false')
     .option('--sftp-clear', '是否在传输开始前清空远程文件夹，默认为false。慎用！删错了你别怪我！')
     .option('-o --sftp-override', '是否覆盖远程文件夹中已存在的文件，默认为false')
+    .option('--sftp-incremental', '增量传输：按 size+mtime 比对，只传变更文件（优先于 override）')
     .option('-i --sftp-ignore-hidden', '是否忽略隐藏文件夹，默认为true')
     .option('-m --sftp-mode <mode>', '远程文件mode，默认为0o777')
     .option('--sftp-concurrency <n>', '传输与建目录的并发上限，默认为5')
@@ -94,6 +95,7 @@ program
                     flat: options.sftpFlat,
                     clear: options.sftpClear,
                     override: options.sftpOverride,
+                    incremental: options.sftpIncremental,
                     ignoreHidden: options.sftpIgnoreHidden,
                     mode,
                     concurrency,
