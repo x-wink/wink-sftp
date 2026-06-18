@@ -3,8 +3,16 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Command } from 'commander'
 import { name, version, description } from '../package.json'
-import type { RunOption, SftpOption, DeployResult, MultiDeployResult, PullResult, LsResult } from './core'
-import { runAuto, pull, ls } from './core'
+import type {
+    RunOption,
+    SftpOption,
+    DeployResult,
+    MultiDeployResult,
+    PullResult,
+    LsResult,
+    RollbackResult,
+} from './core'
+import { runAuto, pull, ls, rollback } from './core'
 import { ConfigError, exitCodeOf, WinkSftpError } from './errors'
 
 const program = new Command()
@@ -123,6 +131,12 @@ const renderDeployOrMulti = (r: DeployResult | MultiDeployResult): void => {
     else renderDeploy(r)
 }
 
+/** 手动回滚结果摘要（走 stderr）。 */
+const renderRollback = (r: RollbackResult): void => {
+    if (r.ok) console.error(`已回滚：${r.remote} ← ${r.backup}`)
+    else console.error(`未找到可回滚的备份：${r.remote}`)
+}
+
 /** 把下载结果渲染为人类摘要（走 stderr）。 */
 const renderPull = (r: PullResult): void => {
     console.error('下载完成：')
@@ -166,51 +180,52 @@ addConnectionOptions(program.command('deploy', { isDefault: true }))
     .option('--hosts <list>', '多机部署：逗号分隔的主机地址，各自合并到连接配置之上（端口/用户/凭据共用）')
     .option('--fail-fast', '多机：首台失败即停止（默认跑完所有主机再汇总）')
     .option('--host-concurrency <n>', '多机：同时部署的主机数上限，默认为5')
+    .option('--rollback', '手动回滚：把远程目标恢复到最近一次 --sftp-backup 生成的快照')
     .action(async (options: Record<string, unknown>) => {
         // 配置构造（含可能抛错的私钥读取）放进 execute 回调，统一由其 try/catch 兜底
-        await execute(
-            Boolean(options.json),
-            () => {
-                const mode = options.sftpMode !== undefined ? parseInt(String(options.sftpMode), 8) : undefined
-                const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
-                const retries = options.sftpRetries !== undefined ? Number(options.sftpRetries) : undefined
-                const hosts = (options.hosts as string | undefined)
-                    ?.split(',')
-                    .map((h) => ({ host: h.trim() }))
-                    .filter((h) => h.host)
-                const hostConcurrency =
-                    options.hostConcurrency !== undefined ? Number(options.hostConcurrency) : undefined
-                const config: RunOption = {
-                    ...buildBase(options),
-                    local: options.local as string | undefined,
-                    remote: options.remote as string | undefined,
-                    dryRun: Boolean(options.dryRun),
-                    audit: options.audit as boolean | undefined,
-                    auditLog: options.auditLog as string | undefined,
-                    hosts: hosts?.length ? hosts : undefined,
-                    failFast: options.failFast as boolean | undefined,
-                    hostConcurrency,
-                    sftpOptions: {
-                        excludes: (options.sftpExcludes as string | undefined)?.split(','),
-                        ignore: (options.sftpIgnore as string | undefined)?.split(','),
-                        flat: options.sftpFlat,
-                        clear: options.sftpClear,
-                        override: options.sftpOverride,
-                        incremental: options.sftpIncremental,
-                        backup: options.sftpBackup,
-                        ignoreHidden: options.sftpIgnoreHidden,
-                        mode,
-                        concurrency,
-                        retries,
-                        debug: options.debug,
-                        beforeRunCommand: options.beforeRunCommand,
-                        afterRunCommand: options.afterRunCommand,
-                    } as SftpOption,
-                }
-                return runAuto(config)
-            },
-            renderDeployOrMulti
-        )
+        const buildConfig = (): RunOption => {
+            const mode = options.sftpMode !== undefined ? parseInt(String(options.sftpMode), 8) : undefined
+            const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
+            const retries = options.sftpRetries !== undefined ? Number(options.sftpRetries) : undefined
+            const hosts = (options.hosts as string | undefined)
+                ?.split(',')
+                .map((h) => ({ host: h.trim() }))
+                .filter((h) => h.host)
+            const hostConcurrency = options.hostConcurrency !== undefined ? Number(options.hostConcurrency) : undefined
+            return {
+                ...buildBase(options),
+                local: options.local as string | undefined,
+                remote: options.remote as string | undefined,
+                dryRun: Boolean(options.dryRun),
+                audit: options.audit as boolean | undefined,
+                auditLog: options.auditLog as string | undefined,
+                hosts: hosts?.length ? hosts : undefined,
+                failFast: options.failFast as boolean | undefined,
+                hostConcurrency,
+                sftpOptions: {
+                    excludes: (options.sftpExcludes as string | undefined)?.split(','),
+                    ignore: (options.sftpIgnore as string | undefined)?.split(','),
+                    flat: options.sftpFlat,
+                    clear: options.sftpClear,
+                    override: options.sftpOverride,
+                    incremental: options.sftpIncremental,
+                    backup: options.sftpBackup,
+                    ignoreHidden: options.sftpIgnoreHidden,
+                    mode,
+                    concurrency,
+                    retries,
+                    debug: options.debug,
+                    beforeRunCommand: options.beforeRunCommand,
+                    afterRunCommand: options.afterRunCommand,
+                } as SftpOption,
+            }
+        }
+        const json = Boolean(options.json)
+        if (options.rollback) {
+            await execute(json, () => rollback(buildConfig()), renderRollback)
+        } else {
+            await execute(json, () => runAuto(buildConfig()), renderDeployOrMulti)
+        }
     })
 
 // pull（下载）：把远程文件/目录拉取到本地

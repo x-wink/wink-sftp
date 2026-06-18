@@ -604,3 +604,41 @@ export const pull = async (options?: RunOption): Promise<PullResult> => {
         return { ok: failed.length === 0, local: localRoot, remote, downloaded, failed, dirs: uniqueDirs }
     })
 }
+
+/** `rollback` 结果。 */
+export interface RollbackResult {
+    /** 是否成功恢复（找到并还原了备份）。 */
+    ok: boolean
+    /** 被恢复的远程目标。 */
+    remote: string
+    /** 用于恢复的备份路径（未找到任何备份则 null）。 */
+    backup: string | null
+}
+
+/**
+ * 手动回滚：把 `remote` 恢复到**最近一次** `--sftp-backup` 生成的快照（`${remote}.wink-bak.<ts>`）。
+ * 在 `remote` 的父目录中按名查找快照、取时间戳最大者还原。无快照时 `ok=false`。
+ * 仅文件级——不撤销部署钩子的副作用（服务重启、数据库变更等）。
+ */
+export const rollback = async (options?: RunOption): Promise<RollbackResult> => {
+    const config = resolveConfig(options, { requireLocal: false })
+    const logger = new Logger({ debug: config.debug, json: config.json })
+    const remote = config.remote
+    const parent = path.posix.dirname(remote)
+    const prefix = `${path.posix.basename(remote)}.wink-bak.`
+    return withSession(config.connect, logger, async (session) => {
+        const sftp = await session.sftp()
+        const backups = (await readdir(sftp, parent))
+            .map((e) => e.name)
+            .filter((name) => name.startsWith(prefix))
+            .toSorted((a, b) => b.localeCompare(a))
+        if (!backups.length) {
+            logger.warn('⚠ 未找到可回滚的备份：' + remote)
+            return { ok: false, remote, backup: null }
+        }
+        const backup = linuxPath(parent, backups[0])
+        await restoreRemote(session, remote, backup)
+        logger.debug('已回滚到备份：' + backup)
+        return { ok: true, remote, backup }
+    })
+}

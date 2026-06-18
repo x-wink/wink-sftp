@@ -184,6 +184,20 @@ const main = async (): Promise<void> => {
                 hosts[1].error?.kind === 'connection',
             r.json
         )
+
+        console.log('11) 手动回滚：恢复到用例 9 生成的快照')
+        // 往 remote 写一个干扰文件，回滚后应被快照覆盖（快照里没有它）
+        fs.writeFileSync(path.join(remote, 'stray.txt'), 'stray')
+        r = await runCli(['-r', remote, '--rollback', '--json', ...conn(pw)])
+        check(
+            'ok && 选中 wink-bak 快照 && 回滚后 index.html 在、干扰文件已被覆盖消失',
+            r.json.ok === true &&
+                typeof r.json.backup === 'string' &&
+                (r.json.backup as string).includes('.wink-bak.') &&
+                fs.existsSync(path.join(remote, 'index.html')) &&
+                !fs.existsSync(path.join(remote, 'stray.txt')),
+            r.json
+        )
     } finally {
         await server.close()
         fs.rmSync(tmp, { recursive: true, force: true })

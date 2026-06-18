@@ -5,15 +5,18 @@
  * 稳定的能力面：会话抽象、部署 / 下载 / 浏览、守护式变更、配置解析与类型化错误。
  */
 export { SshSession, withSession } from './session'
-export { run, pull, ls } from './core'
+export { run, runMany, runAuto, pull, ls, rollback } from './core'
 export type {
     RunOption,
     SftpOption,
     ResolvedConfig,
     DeployResult,
+    MultiDeployResult,
+    HostDeployResult,
     PullResult,
     LsResult,
     RemoteEntry,
+    RollbackResult,
     EnvOverride,
 } from './core'
 export { guard, backupRemote, restoreRemote, existsRemote } from './guard'
