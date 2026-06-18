@@ -1,3 +1,28 @@
+## v2.1.0
+
+[compare changes](https://github.com/x-wink/wink-sftp/compare/v2.0.1...v2.1.0)
+
+### 🚀 Enhancements
+
+- 新增运维原语 exec/status/logs 与守护式编辑 edit ([9b8f5b4](https://github.com/x-wink/wink-sftp/commit/9b8f5b4))
+
+### 📖 Documentation
+
+- 发版流程增加推 tag 前 code-review 与门禁失败处理 ([49587a0](https://github.com/x-wink/wink-sftp/commit/49587a0))
+- 同步 v3.0 运维原语（exec/status/logs/edit）至 README/ROADMAP/CLAUDE ([f1763be](https://github.com/x-wink/wink-sftp/commit/f1763be))
+
+### 📦 Build
+
+- 发版改为两步（先推 main 过门禁，再推 tag 发版） ([a81c2f1](https://github.com/x-wink/wink-sftp/commit/a81c2f1))
+
+### 🏡 Chore
+
+- 放宽 commitlint body/footer 行长限制 ([3c66a7a](https://github.com/x-wink/wink-sftp/commit/3c66a7a))
+
+### ❤️ Contributors
+
+- Xwink <1041367524@qq.com>
+
 ## v2.0.1
 
 [compare changes](https://github.com/x-wink/wink-sftp/compare/v2.0.0...v2.0.1)
