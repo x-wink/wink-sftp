@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { loadConfigFile, resolveConfig } from '../src/config'
+import { loadConfigFile, resolveConfig, interpolateSecrets, parseDotEnv } from '../src/config'
 
 let dir: string
 
@@ -101,5 +101,83 @@ describe('resolveConfig', () => {
             JSON.stringify({ ...validConfig, connect: { host: 'h', port: 22, username: 'u' } })
         )
         expect(() => resolveConfig({ config: p })).toThrow(/connect\.password 或 connect\.privateKey/)
+    })
+})
+
+describe('interpolateSecrets', () => {
+    const env = { PWD_VAR: 's3cret', HOST_VAR: 'example.com', EMPTY: '' }
+
+    it('替换字符串中的 ${VAR}（整值与内嵌）', () => {
+        const { value, missing } = interpolateSecrets({ a: '${PWD_VAR}', b: 'pre-${HOST_VAR}-post' }, env)
+        expect(value).toEqual({ a: 's3cret', b: 'pre-example.com-post' })
+        expect(missing).toEqual([])
+    })
+
+    it('递归处理嵌套对象与数组', () => {
+        const { value } = interpolateSecrets({ connect: { password: '${PWD_VAR}' }, list: ['${HOST_VAR}'] }, env)
+        expect(value).toEqual({ connect: { password: 's3cret' }, list: ['example.com'] })
+    })
+
+    it('空字符串环境变量视为已定义（不算缺失）', () => {
+        const { value, missing } = interpolateSecrets({ a: '${EMPTY}' }, env)
+        expect(value).toEqual({ a: '' })
+        expect(missing).toEqual([])
+    })
+
+    it('未定义变量被收集进 missing', () => {
+        const { missing } = interpolateSecrets({ a: '${NOPE}', b: '${PWD_VAR}' }, env)
+        expect(missing).toEqual(['NOPE'])
+    })
+
+    it('非字符串值原样保留', () => {
+        const { value } = interpolateSecrets({ port: 22, flag: true, nil: null }, env)
+        expect(value).toEqual({ port: 22, flag: true, nil: null })
+    })
+})
+
+describe('parseDotEnv', () => {
+    it('解析键值、忽略注释与空行、去除引号、支持 export', () => {
+        const parsed = parseDotEnv(
+            ['# comment', '', 'A=1', 'export B = two', 'C="quoted"', "D='single'", 'bad line'].join('\n')
+        )
+        expect(parsed).toEqual({ A: '1', B: 'two', C: 'quoted', D: 'single' })
+    })
+})
+
+describe('loadConfigFile + secrets', () => {
+    it('从 process.env 注入 ${VAR}', () => {
+        process.env.WINK_TEST_PWD = 'injected-pw'
+        const p = write(
+            'sftp.json',
+            JSON.stringify({ ...validConfig, connect: { ...validConfig.connect, password: '${WINK_TEST_PWD}' } })
+        )
+        try {
+            expect(loadConfigFile(p).connect?.password).toBe('injected-pw')
+        } finally {
+            delete process.env.WINK_TEST_PWD
+        }
+    })
+
+    it('引用未定义变量抛 ConfigError', () => {
+        const p = write(
+            'sftp.json',
+            JSON.stringify({ ...validConfig, connect: { ...validConfig.connect, password: '${WINK_UNDEFINED_VAR}' } })
+        )
+        expect(() => loadConfigFile(p)).toThrow(/未定义的环境变量.*WINK_UNDEFINED_VAR/s)
+    })
+
+    it('.env 作为环境变量回退（cwd 下）', () => {
+        const cwd = process.cwd()
+        process.chdir(dir)
+        fs.writeFileSync(path.join(dir, '.env'), 'WINK_DOTENV_PWD=from-dotenv\n')
+        const p = write(
+            'sftp.json',
+            JSON.stringify({ ...validConfig, connect: { ...validConfig.connect, password: '${WINK_DOTENV_PWD}' } })
+        )
+        try {
+            expect(loadConfigFile(p).connect?.password).toBe('from-dotenv')
+        } finally {
+            process.chdir(cwd)
+        }
     })
 })

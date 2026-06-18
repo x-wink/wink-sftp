@@ -7,3 +7,4 @@ stats.html
 *.local
 package-lock.json
 sftp.json
+.env
