@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 不要主动提交（`git commit`），仅在用户明确要求时才提交。
 - 提交信息中不附加任何署名（不加 `Co-Authored-By`、`Generated with` 等）。
 - **发版前必须更新 README 使用说明与相关文档**（README 选项/配置表/示例、`docs/ROADMAP.md`、`docs/ARCHITECTURE.md`、`CLAUDE.md`），确保文档与新功能同步，不留过时描述。
+- **发版前必须同步更新随包技能**（`.claude/skills/`）：技能随 npm 包分发（`package.json#files` 含 `.claude/skills`），是 agent 可调用面的一部分。新增/变更子命令时，相应新建或更新 SKILL.md（用法、安全规约、`--json` 结果、退出码），并同步 README/ROADMAP 的 Skill 集描述，使技能面与命令面对齐。
 
 ## Planning docs
 

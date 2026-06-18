@@ -213,7 +213,7 @@ stack:
 └── scripts/            # 可选：固化 dry-run → 确认 → 真跑 流程
 ```
 
-**现状 Skill 集**：`deploy`（部署，覆盖增量 / `.winksftpignore` / 多环境 / YAML / secrets）+ `pull`（远程只读：`pull` 下载 + `ls` 浏览）。随子命令（status/logs/provision…）继续扩充。
+**现状 Skill 集**：`deploy`（部署，覆盖增量 / `.winksftpignore` / 多环境 / YAML / secrets）+ `pull`（远程只读：`pull` 下载 + `ls` 浏览）+ `ops`（运维原语：`exec`/`status`/`logs`/`ps` 诊断 + `service`/`edit` 维护）+ `provision`（环境初始化，按 stack 收敛 node/jdk/python/docker）。随子命令继续扩充。
 
 **分发给最终用户**：Skill 既供本仓库贡献者使用，也随 npm 包发布（`package.json#files` 含 `.claude/skills`）。**现状**：用户从 `node_modules/@xwink/sftp/.claude/skills/` 手动拷贝到自己项目的 `.claude/skills/`，README 给出指引。**规划**：在 Phase 5 子命令体系内提供 `wink-sftp skill install [name]`，自动把随包 Skill 落到用户项目 `.claude/skills/`（或 `~/.claude/skills/`），免去手动拷贝；与 status/logs/provision 等子命令一并扩展可安装的 Skill 集。
 
