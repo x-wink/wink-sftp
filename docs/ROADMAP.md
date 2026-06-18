@@ -12,7 +12,7 @@
 | ------- | ---- | ---------------------- | --------- |
 | Phase 1 | v1.1 | 稳定与安全加固（止血） | ✅ 已完成 |
 | Phase 2 | v1.2 | 健壮性与工程化（加固） | 🚧 进行中 |
-| Phase 3 | v1.3 | 功能增强（提效）       | ⬜ 计划中 |
+| Phase 3 | v1.3 | 功能增强（提效）       | ✅ 已完成 |
 | Phase 4 | v2.0 | 能力扩展（编排）       | ⬜ 计划中 |
 | Phase 5 | v3.0 | 平台化（单机）         | ⬜ 计划中 |
 | Phase 6 | v4.0 | 规模化与可视化         | ⬜ 计划中 |
@@ -95,16 +95,16 @@ Agent 协作：
 
 ---
 
-## Phase 3 — 功能增强（v1.3，提效）⬜
+## Phase 3 — 功能增强（v1.3，提效）✅
 
 > 目标：从「能传」到「好用」，补齐部署工具标配能力。
 
-- **双向传输 `pull` / 下载**：补 `fastGet` 实现下载，新增 `ls` 远程文件浏览。
-- **增量传输**：按 size + mtime 或远程 hash 比对，只传变更文件。
-- **`.winksftpignore`**：gitignore 风格忽略文件，以 glob 匹配取代全字匹配的 `excludes`。
-- **多环境配置**：单配置文件内支持 `dev` / `test` / `prod` 多套环境，`--env prod` 选择。
-- **配置格式 JSON + YAML**：JSON 与 YAML 双格式（YAML 支持多行/注释，对 stack·inventory 更友好），统一由 zod 校验。
-- **secrets 环境变量引用**：配置中以 `${ENV_VAR}` 引用密码/密钥，值从环境变量 / `.env` / stdin 注入，不落明文。
+- [x] **双向传输 `pull` / 下载**：`fastGet` 下载（目录递归镜像 + 受限并发/重试），新增 `ls` 远程目录浏览；CLI 升级为子命令体系，`deploy` 仍为默认命令向后兼容（`core.ts` 抽出通用 `withConnection`）。
+- [x] **增量传输**：`sftpOptions.incremental` / `--sftp-incremental`，按 size + mtime 比对远程文件（`sftp.stat`），只传变更文件、优先于 `override`。（远程 hash 比对暂未做，按需再加。）
+- [x] **`.winksftpignore`**：gitignore 风格忽略文件（`ignore` 包，含目录剪枝），补充全字匹配的 `excludes`；亦支持 `sftpOptions.ignore` 内联规则，二者合并。
+- [x] **多环境配置**：配置文件 `environments` 映射 + `--env <name>` 选中后深合并到基础配置之上（`deepMerge`）。
+- [x] **配置格式 JSON + YAML**：按扩展名识别 `.json/.yaml/.yml`（js-yaml），统一由 zod schema 校验（`config.ts` 单一事实源）。
+- [x] **secrets 环境变量引用**：配置中以 `${ENV_VAR}` 引用，校验前从环境变量（优先）/ `.env` 注入，缺变量报错、不落明文。（stdin 注入暂未做。）
 
 ---
 
@@ -205,8 +205,8 @@ stack:
 
 ```
 ✅ v1.1  止血    安全/正确性 6 项 + --json/--dry-run + 测试骨架/CI    → 可信（CI / agent 可用）
-🚧 v1.2  加固    并发 / 重试 / 密钥登录 / 审计 / 测试完善 / deploy Skill → 抗规模、可生产、可协作
-⬜ v1.3  提效    pull 下载 / ls / 增量 / ignore / 多环境 / JSON+YAML / secrets → 好用
+✅ v1.2  加固    并发 / 重试 / 密钥登录 / 审计 / 测试完善 / deploy Skill → 抗规模、可生产、可协作
+✅ v1.3  提效    pull 下载 / ls / 增量 / ignore / 多环境 / JSON+YAML / secrets → 好用
 ⬜ v2.0  扩展    guard 原语 / 多机 / 文件级回滚 / 编程 API（SshSession）  → 编排工具
 ⬜ v3.0  平台    单机 provision + status/logs/ps/edit 只读原语          → 单机全生命周期
 ⬜ v4.0  规模    inventory / 多机批量 / ink TUI / daemon + notifier      → 多机舰队 + 可视化
