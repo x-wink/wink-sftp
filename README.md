@@ -255,7 +255,7 @@ npx wink-sftp edit /etc/nginx/nginx.conf --file ./nginx.conf \
 
 ## 🧱 环境初始化（provision）
 
-按配置文件 `stack` 声明把单台服务器**收敛**到目标栈状态——检测当前版本，未达标才安装。**幂等**：已满足的组件自动跳过。支持语言运行时 + Docker（`nodejs`/`jdk`/`python`/`docker`）与 `nginx`/`redis`/`mysql`（install + verify，redis/mysql 可选 `mode: docker|native`）。守护式写配置文件（复用 `guard`）留待下批。
+按配置文件 `stack` 声明把单台服务器**收敛**到目标栈状态——检测当前版本，未达标才安装。**幂等**：已满足的组件自动跳过。支持语言运行时 + Docker（`nodejs`/`jdk`/`python`/`docker`）与 `nginx`/`redis`/`mysql`（install + verify，redis/mysql 可选 `mode: docker|native`）。任一组件还可声明 `configure` **守护式写配置文件**（本地文件 → 远程，备份/校验/reload/失败回滚，复用 `guard`）。
 
 ```yaml
 # sftp.yaml — 与部署共用 connect，新增 stack 段
@@ -269,7 +269,13 @@ stack:
     python: '3.11.9' # 经 pyenv 安装并设为全局（建议用完整补丁号）
     jdk: '17.0.9-tem' # 经 sdkman 安装（用 sdkman 候选标识）
     docker: true # 官方脚本安装；false 则跳过该组件
-    nginx: latest # apt 安装 + nginx -t 校验
+    nginx: # apt 安装 + nginx -t 校验，并守护式写配置
+        version: latest
+        configure: # 安装/已满足后逐条经 guard 落地：备份→写→校验→reload→失败回滚
+            - file: ./conf/nginx.conf # 本地源（相对启动目录）
+              remote: /etc/nginx/nginx.conf # 远程目标
+              validate: nginx -t # 可选：退出码非零触发回滚
+              reload: systemctl reload nginx # 可选：reload 失败同样回滚
     redis: { version: 7, mode: docker, maxmemory: 512mb } # mode: docker|native
     mysql: { version: 8, mode: docker, rootPassword: ${MYSQL_ROOT_PWD} } # docker 模式 rootPassword 必填
 ```
@@ -287,7 +293,8 @@ npx wink-sftp provision nodejs docker -c ./sftp.yaml --yes
 
 - **安全模型**：`provision` 是写操作——必须 `--dry-run`（预演）或 `--yes`（确认）二选一，二者都没有时直接拒绝。
 - **幂等**：先检测（`node --version` 等）再收敛；已满足目标版本则不执行任何步骤。版本按**点分前缀**匹配（目标 `20` 满足 `20.11.0`）。
-- **结构化结果**：`{ok,dryRun,components:[{component,desired,detected,satisfied,planned,executed,ok}]}`；步骤退出码非零作 `ok=false`、停在首个失败步骤、不报错。实跑记一条本地审计。
+- **结构化结果**：`{ok,dryRun,components:[{component,desired,detected,satisfied,planned,executed,plannedConfigs,configured,ok}]}`；步骤退出码非零作 `ok=false`、停在首个失败步骤、不报错。实跑记一条本地审计。
+- **守护式写配置（`configure`）**：任一组件可声明 `configure: [{ file, remote, validate?, reload? }]`，安装/已满足后逐条经 `guard` 落地（备份→写→校验→reload→失败回滚），与 `edit` 同一流水线；本地源经 SFTP、明文不进命令。实跑前预检本地源文件存在（缺则报错、不连接）；预演（`--dry-run`）只在 `plannedConfigs` 出计划、不写、不要求文件就位。任一文件失败即停（已回滚到备份）。
 - **边界**：面向固定栈的策划式 recipes（Ubuntu/Debian 优先），非通用配置管理引擎。原生包安装（nginx/redis/mysql native）需以 **root 或免密 sudo** 用户连接。docker 模式用固定容器名（`wink-redis`/`wink-mysql`），同机已有同名容器会冲突。
 - **secret 不外泄**：含密码的步骤（如 mysql `rootPassword`）在 `--json` / 审计里**自动脱敏**（密码替换为星号），明文只用于实际执行。
 

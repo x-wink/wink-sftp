@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { versionSatisfies, normalizeDesired, RECIPES } from '../src/provision'
+import { versionSatisfies, normalizeDesired, parseConfigs, RECIPES } from '../src/provision'
 
 describe('versionSatisfies', () => {
     it('点分前缀匹配：目标为检测版本的前缀段即满足', () => {
@@ -41,6 +41,46 @@ describe('normalizeDesired', () => {
     it('空字符串 / 纯空白版本 → 抛错（防 nvm install ""）', () => {
         expect(() => normalizeDesired('nodejs', '')).toThrow(/为空/)
         expect(() => normalizeDesired('nodejs', '   ')).toThrow(/为空/)
+    })
+})
+
+describe('parseConfigs（守护式写配置声明）', () => {
+    it('缺省 configure → 空数组', () => {
+        expect(parseConfigs({})).toEqual([])
+        expect(parseConfigs({ mode: 'docker' })).toEqual([])
+    })
+    it('解析 file/remote 与可选 validate/reload', () => {
+        const specs = parseConfigs({
+            configure: [
+                {
+                    file: './nginx.conf',
+                    remote: '/etc/nginx/nginx.conf',
+                    validate: 'nginx -t',
+                    reload: 'systemctl reload nginx',
+                },
+                { file: './redis.conf', remote: '/etc/redis/redis.conf' },
+            ],
+        })
+        expect(specs).toHaveLength(2)
+        expect(specs[0]).toEqual({
+            file: './nginx.conf',
+            remote: '/etc/nginx/nginx.conf',
+            validate: 'nginx -t',
+            reload: 'systemctl reload nginx',
+        })
+        expect(specs[1]).toEqual({ file: './redis.conf', remote: '/etc/redis/redis.conf' })
+    })
+    it('configure 非数组 → 抛错', () => {
+        expect(() => parseConfigs({ configure: { file: 'a', remote: 'b' } })).toThrow(/数组/)
+    })
+    it('缺 file / 缺 remote → 抛错', () => {
+        expect(() => parseConfigs({ configure: [{ remote: '/x' }] })).toThrow(/file/)
+        expect(() => parseConfigs({ configure: [{ file: './a' }] })).toThrow(/remote/)
+        expect(() => parseConfigs({ configure: [{ file: '  ', remote: '/x' }] })).toThrow(/file/)
+    })
+    it('validate/reload 非字符串 → 抛错', () => {
+        expect(() => parseConfigs({ configure: [{ file: './a', remote: '/x', validate: 1 }] })).toThrow(/validate/)
+        expect(() => parseConfigs({ configure: [{ file: './a', remote: '/x', reload: true }] })).toThrow(/reload/)
     })
 })
 

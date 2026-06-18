@@ -349,6 +349,31 @@ const main = async (): Promise<void> => {
             sout,
             sCode,
         })
+
+        console.log('25) provision configure：守护式写配置声明经 CLI 流到结构化结果（dry-run 出 plannedConfigs）')
+        const cfgConf = path.join(tmp, 'stack-configure.json')
+        fs.writeFileSync(
+            cfgConf,
+            JSON.stringify({
+                connect: { host: '127.0.0.1', port: Number(port), username: 'tester', password: 'pw' },
+                stack: {
+                    nginx: {
+                        version: 'latest',
+                        configure: [{ file: './nginx.conf', remote: '/etc/nginx/nginx.conf', validate: 'nginx -t' }],
+                    },
+                },
+            })
+        )
+        r = await runCli(['provision', '-c', cfgConf, '--dry-run', '--json'])
+        const cc = (r.json.components as { plannedConfigs?: { remote: string }[] }[] | undefined)?.[0]
+        check(
+            'ok && plannedConfigs 出现且 remote 正确',
+            r.json.ok === true &&
+                Array.isArray(cc?.plannedConfigs) &&
+                cc.plannedConfigs.length === 1 &&
+                cc.plannedConfigs[0].remote === '/etc/nginx/nginx.conf',
+            r.json
+        )
     } finally {
         await server.close()
         fs.rmSync(tmp, { recursive: true, force: true })

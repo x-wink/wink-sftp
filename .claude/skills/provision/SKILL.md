@@ -1,23 +1,24 @@
 ---
 name: provision
-description: 用 wink-sftp 的 provision 按声明式 stack 初始化/收敛单台服务器的环境（安装 node/jdk/python/docker/nginx/redis/mysql）。当用户要「初始化服务器环境 / 装运行时或中间件 / 配置 stack / 准备一台新机器跑应用」、或要把服务器收敛到指定 node/jdk/python/docker/nginx/redis/mysql 版本时使用。写操作，封装「先预演 diff、人工确认、再 --yes 执行、按结构化结果判定」的安全流程。
+description: 用 wink-sftp 的 provision 按声明式 stack 初始化/收敛单台服务器的环境（安装 node/jdk/python/docker/nginx/redis/mysql，并守护式写配置文件）。当用户要「初始化服务器环境 / 装运行时或中间件 / 配置 stack / 下发 nginx/redis/mysql 配置文件 / 准备一台新机器跑应用」、或要把服务器收敛到指定 node/jdk/python/docker/nginx/redis/mysql 版本与配置时使用。写操作，封装「先预演 diff、人工确认、再 --yes 执行、按结构化结果判定」的安全流程。
 ---
 
 # wink-sftp 环境初始化（provision）
 
 `wink-sftp provision` 按配置文件的声明式 `stack` 把**单台服务器收敛到目标栈状态**——检测当前版本，未达标才安装。**幂等**：已满足的组件自动跳过。本 Skill 规约其安全调用流程。
 
-支持组件：语言运行时 `nodejs`(nvm) / `jdk`(sdkman) / `python`(pyenv)、`docker`(官方脚本)、`nginx`(apt + `nginx -t`)、`redis`/`mysql`（`mode: docker|native`，install + verify）。**守护式写配置文件**（复用 `edit` 同款 `guard` 流水线，见 `ops` Skill）留待下批。
+支持组件：语言运行时 `nodejs`(nvm) / `jdk`(sdkman) / `python`(pyenv)、`docker`(官方脚本)、`nginx`(apt + `nginx -t`)、`redis`/`mysql`（`mode: docker|native`，install + verify）。任一组件还可声明 `configure` **守护式写配置文件**（本地文件 → 远程，复用 `edit` 同款 `guard` 流水线：备份→写→校验→reload→失败回滚）。
 
 ## 核心安全规约（务必遵守）
 
 1. **写操作，先预演再执行**：`provision` 会安装/改动系统，**必须** `--dry-run`（预演：检测当前状态 + 打印将执行的步骤，不落地）或 `--yes`（确认执行）二者其一，**都没有则直接拒绝**（退出码 2）。标准做法：先 `--dry-run --json` 给用户看检测结果与计划，确认后再 `--yes`。
 2. **幂等可放心重跑**：先检测（`node --version` 等）再收敛；已满足目标版本则不执行任何步骤。版本按**点分前缀**匹配（目标 `20` 满足 `20.11.0`）。重复跑不会重复安装。
 3. **按结构化结果判定成败**：
-    - **退出码**：0 成功；2 配置错误（缺 stack / 缺 `--dry-run`/`--yes` / 不支持的组件 / 版本声明为空）；3 连接失败；4 收敛步骤失败。
-    - **`--json`**：`ok` 为总判定；每个组件有 `satisfied`（是否已满足、无需动作）、`planned`（将执行的步骤）、`executed`（实际执行结果，含每步 `ok`）。
+    - **退出码**：0 成功；2 配置错误（缺 stack / 缺 `--dry-run`/`--yes` / 不支持的组件 / 版本声明为空 / configure 形态非法或本地源文件缺失）；3 连接失败；4 收敛或配置步骤失败。
+    - **`--json`**：`ok` 为总判定；每个组件有 `satisfied`（是否已满足、无需动作）、`planned`（将执行的步骤）、`executed`（实际执行结果，含每步 `ok`）、`plannedConfigs`（将写的配置）、`configured`（已写配置结果，含 `ok`/`rolledBack`）。
 4. **凭据不外泄**：stack 里的 secrets（如 mysql `rootPassword`）用 `${ENV_VAR}` 引用、不落明文；含 secret 的步骤在 `--json`/审计里会自动脱敏（密码替换为星号），明文只用于实际执行，勿回显明文密码。
 5. **原生包需 root**：`nginx`/`redis`/`mysql` 的 native 安装走 apt，需以 **root 或免密 sudo** 用户连接。
+6. **守护式写配置（`configure`）安全**：任一组件可声明 `configure: [{ file, remote, validate?, reload? }]`，安装/已满足后逐条经 `guard` 落地（备份→写→校验→reload→失败回滚），本地源经 SFTP、明文不进命令。**实跑前预检本地源文件存在**（缺则报错、不连接）；预演（`--dry-run`）只在 `plannedConfigs` 出计划、不写、不要求文件就位。任一文件失败即停（已回滚到备份），结果进 `configured`。改系统关键配置（nginx/mysql 等）建议**带 `validate`**，校验失败能自动回滚。
 
 ## 配置：stack 段
 
@@ -34,7 +35,13 @@ stack:
     python: '3.11.9' # 经 pyenv 安装并设为全局；建议用完整补丁号
     jdk: '17.0.9-tem' # 经 sdkman 安装；用 sdkman 候选标识（如 17-tem / 17.0.9-tem）
     docker: true # 官方脚本安装；false 则跳过该组件（不比版本）
-    nginx: latest # apt 安装 + nginx -t 校验（原生，已装即满足）
+    nginx: # 对象形态可带 configure：安装/已满足后守护式写配置文件
+        version: latest # apt 安装 + nginx -t 校验（原生，已装即满足）
+        configure: # 逐条经 guard：备份→写→校验→reload→失败回滚
+            - file: ./conf/nginx.conf # 本地源（相对启动目录，须存在）
+              remote: /etc/nginx/nginx.conf # 远程目标
+              validate: nginx -t # 可选：退出码非零触发回滚
+              reload: systemctl reload nginx # 可选：reload 失败同样回滚
     redis: { version: 7, mode: docker, maxmemory: 512mb } # mode: docker(比镜像版本)|native(apt)
     mysql: { version: 8, mode: docker, rootPassword: ${MYSQL_ROOT_PWD} } # docker 模式 rootPassword 必填
 ```
@@ -69,9 +76,11 @@ wink-sftp provision nodejs docker -c sftp.yaml --yes
             "component": "nodejs",
             "desired": "20",
             "detected": { "installed": true, "version": "18.19.0" }, // 收敛前检测
-            "satisfied": false, // 已满足则跳过，无步骤
+            "satisfied": false, // 已满足则跳过安装步骤（configure 仍会执行）
             "planned": [{ "description": "安装 Node 20 并设为默认", "command": "…" }],
             "executed": [{ "description": "…", "command": "…", "ok": true, "stdout": "", "stderr": "", "code": 0 }],
+            "plannedConfigs": [], // 该组件声明的 configure（本地→远程 + validate/reload）
+            "configured": [], // 已写配置结果：[{ file, remote, ok, backup, rolledBack, error? }]
             "ok": true,
         },
         {
@@ -100,7 +109,7 @@ wink-sftp provision nodejs docker -c sftp.yaml --yes
 - `jdk` 用 sdkman 候选标识；老式 Java 8 的 `1.8.0_x` 编号已归一为 `8.0.x`，故 `jdk: '8'` 能命中已装版本。
 - `python` 建议用完整补丁号（如 `3.11.9`），传给 `pyenv install -s`。
 - `docker` 是布尔开关组件：声明 `true`/`false`，**不比版本**（已装即满足）。
-- `nginx`/`redis`/`mysql` 本批为 **install + verify**（装好 + `nginx -t` / `redis-cli ping` / `mysqladmin ping` 校验）；守护式写配置文件下批。
+- `nginx`/`redis`/`mysql` 为 **install + verify**（装好 + `nginx -t` / `redis-cli ping` / `mysqladmin ping` 校验）；如需下发配置文件，用组件对象的 `configure`（守护式写、复用 `guard`）。
 - `redis`/`mysql` 的 `mode: native`（apt）按「已装即满足」（发行版版本不强比）；`mode: docker` 按镜像 tag 比版本。原生安装需 root/免密 sudo。docker 模式用固定容器名 `wink-redis`/`wink-mysql`，同机已有同名容器会冲突。
 - `mysql` docker 模式 `rootPassword` 必填（缺则报配置错误）；其明文绝不进 `--json`/审计（脱敏为星号）。
 - step 失败会停在该组件首个失败步骤、不继续；其它组件互不影响。

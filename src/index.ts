@@ -231,14 +231,23 @@ const renderProvision = (r: ProvisionResult): void => {
         const cur = c.detected.installed ? c.detected.version : '未安装'
         if (c.satisfied) {
             console.error(`  ✓ ${c.component}：已满足（目标 ${c.desired}，当前 ${cur}）`)
-            continue
-        }
-        const mark = c.ok ? '↻' : '✗'
-        console.error(`  ${mark} ${c.component}：目标 ${c.desired}，当前 ${cur}`)
-        if (r.dryRun) {
-            for (const s of c.planned) console.error(`    · ${s.description}`)
         } else {
-            for (const s of c.executed) console.error(`    ${s.ok ? '✓' : '✗'} ${s.description}`)
+            const mark = c.ok ? '↻' : '✗'
+            console.error(`  ${mark} ${c.component}：目标 ${c.desired}，当前 ${cur}`)
+            if (r.dryRun) {
+                for (const s of c.planned) console.error(`    · ${s.description}`)
+            } else {
+                for (const s of c.executed) console.error(`    ${s.ok ? '✓' : '✗'} ${s.description}`)
+            }
+        }
+        // 守护式写配置（与安装状态无关：已装的服务也常要推新配置）
+        if (r.dryRun) {
+            for (const cfg of c.plannedConfigs) console.error(`    · 写配置 ${cfg.file} → ${cfg.remote}`)
+        } else {
+            for (const cfg of c.configured) {
+                const m = cfg.ok ? '✓' : cfg.rolledBack ? '↩' : '✗'
+                console.error(`    ${m} 写配置 ${cfg.remote}${cfg.ok ? '' : `：${cfg.error ?? ''}`}`)
+            }
         }
     }
 }
@@ -503,7 +512,9 @@ addConnectionOptions(program.command('service'))
 
 // provision（环境初始化）：按 stack 声明把服务器收敛到目标栈（写操作，需 --dry-run 预演或 --yes 执行）
 addConnectionOptions(program.command('provision'))
-    .description('环境初始化：按配置文件 stack 声明收敛服务器（node/jdk/python/docker；--dry-run 预演 / --yes 执行）')
+    .description(
+        '环境初始化：按配置文件 stack 收敛服务器（node/jdk/python/docker/nginx/redis/mysql + 守护式写配置；--dry-run 预演 / --yes 执行）'
+    )
     .argument('[components...]', '只处理指定组件（默认处理 stack 中全部）')
     .option('--dry-run', '预演：检测当前状态并打印将执行的步骤，但不落地')
     .option('--yes', '确认执行写操作（安装/收敛步骤）')

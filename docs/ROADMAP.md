@@ -14,7 +14,7 @@
 | Phase 2 | v1.2       | 健壮性与工程化（加固） | ✅ 已完成   |
 | Phase 3 | v1.3       | 功能增强（提效）       | ✅ 已完成   |
 | Phase 4 | v2.0       | 能力扩展（编排）       | ✅ 已完成   |
-| Phase 5 | v3.0       | 平台化（单机）         | 🚧 进行中   |
+| Phase 5 | v3.0       | 平台化（单机）         | ✅ 已完成   |
 | Phase 6 | v4.0       | 规模化与可视化         | ⬜ 计划中   |
 | 专项    | 贯穿各版本 | 让 AI Agent 可调用     | 🔄 持续更新 |
 
@@ -126,7 +126,7 @@ Agent 协作：
 
 ---
 
-## Phase 5（v3.0）— 平台化（单机）🚧
+## Phase 5（v3.0）— 平台化（单机）✅
 
 > 目标：在通用 `SshSession` 层上把工具从「部署」展开为「SSH 快捷操作入口」，覆盖单机的环境初始化、只读运维与守护式配置编辑。CLI 升级为子命令体系（`deploy` 向后兼容，无子命令时默认 deploy）。provision 与只读运维原语并行推进——二者依赖同一地基（`SshSession` + `guard`），不互相阻塞。
 >
@@ -137,13 +137,13 @@ Agent 协作：
 > - ✅ **已交付（三批）**：`provision` 框架（recipe 契约 detect/parse/converge 纯函数 + 编排器 + `--dry-run`/`--yes` 写护栏 + 结构化结果 + 审计）+ **语言运行时 + Docker** recipe：`nodejs`(nvm)/`jdk`(sdkman)/`python`(pyenv)/`docker`(官方脚本)，幂等（detect→converge）。纯函数 fixture + mock 单测 + e2e（dry-run 检测 + 写护栏）。
 > - ✅ **已交付（流式）**：`SshSession.stream()` 流式底座 + `logs --follow`（`tail -f` + grep）+ `exec --stream`（实时 stdout/stderr 直出、退出码透传）。mock 单测 + e2e。
 > - ✅ **已交付（中间件批）**：`provision` 的 `nginx`/`redis`/`mysql` recipe（**install + verify**：装好 + `nginx -t` / `redis-cli ping` / `mysqladmin ping`；redis/mysql 支持 `mode: docker|native`、maxmemory/rootPassword 安装时设；含 secret 步骤脱敏）。纯函数 + mock 单测 + e2e。
-> - ⬜ **待做（精修）**：provision 守护式**写配置文件**（stack 指定本地 conf → `guard` 备份/写入/校验/reload/回滚），把 nginx/redis/mysql 从 install+verify 升级为含 configure。
+> - ✅ **已交付（守护式配置批）**：provision 守护式**写配置文件**——任一组件 stack 对象声明 `configure`（本地 conf → 远程，附可选 `validate`/`reload`），安装/已满足后逐条经 `guard`（备份→写→校验→reload→失败回滚）落地，与 `edit` 同一流水线；本地源经 SFTP、明文不进命令；实跑前预检本地源文件存在（fail-fast）。纯函数 `parseConfigs` + mock 单测 + e2e。**Phase 5 至此全部完成。**
 
 ### 环境初始化（单机 provision）— 主打
 
-**已交付**：框架（recipe 契约 + 编排器 + `--dry-run`/`--yes` 写护栏 + 结构化结果 + 审计）+ 全部组件 recipe（`nodejs`/`jdk`/`python`/`docker` 语言运行时与 docker，`nginx`/`redis`/`mysql` 中间件，后者 install + verify、redis/mysql 支持 `mode: docker|native`）。recipe 以**纯函数**描述（`detect(options)` 检测命令 + `parse` 解析 + `converge` 收敛规划），编排器执行检测→算收敛→预演或执行；幂等由 `converge`「已满足则空步骤」保证；含 secret 步骤经 `PlanStep.display` 脱敏，对外（--json/审计）不泄漏明文。stack 经配置文件 `stack` 段声明、参与多环境深合并。**待做（精修）**：守护式**写配置文件**（复用 `guard`，把中间件从 install+verify 升级为含 configure）。
+**已交付（全部完成）**：框架（recipe 契约 + 编排器 + `--dry-run`/`--yes` 写护栏 + 结构化结果 + 审计）+ 全部组件 recipe（`nodejs`/`jdk`/`python`/`docker` 语言运行时与 docker，`nginx`/`redis`/`mysql` 中间件 install + verify、redis/mysql 支持 `mode: docker|native`）+ **守护式写配置文件**（`configure`）。recipe 以**纯函数**描述（`detect(options)` 检测命令 + `parse` 解析 + `converge` 收敛规划），编排器执行检测→算收敛→预演或执行；幂等由 `converge`「已满足则空步骤」保证；含 secret 的命令/输出由编排层按 secret 明文值**统一脱敏**（命令+stdout+stderr+失败路径），对外（--json/审计）不泄漏明文。stack 经配置文件 `stack` 段声明、参与多环境深合并。守护式 `configure`：任一组件 stack 对象声明 `configure`（本地文件 → 远程，附可选 `validate`/`reload`），安装/已满足后逐条经 `guard`（备份→写→校验→reload→失败回滚）落地，与 `edit` 同一流水线；本地源经 SFTP、明文不进命令。
 
-`provision` 按声明式 stack 定义把单台服务器**收敛**到目标栈状态，覆盖装配 / 配置 / 维护。边界：面向固定栈的策划式 recipes，非通用 CM 引擎。原生包安装需以 root（或免密 sudo）连接。（多 stack 命名选择 `--stack <name>` 待 configure 精修批一并落地。）
+`provision` 按声明式 stack 定义把单台服务器**收敛**到目标栈状态，覆盖装配 / 配置 / 维护。边界：面向固定栈的策划式 recipes，非通用 CM 引擎。原生包安装需以 root（或免密 sudo）连接。（多 stack 命名选择 `--stack <name>` 留待 Phase 6 inventory 一并落地。）
 
 ```yaml
 stack:
@@ -230,7 +230,7 @@ stack:
 ✅ v1.2  加固    并发 / 重试 / 密钥登录 / 审计 / 测试完善 / deploy Skill → 抗规模、可生产、可协作
 ✅ v1.3  提效    pull 下载 / ls / 增量 / ignore / 多环境 / JSON+YAML / secrets → 好用
 ✅ v2.0  扩展    guard 原语 / 多机 / 文件级回滚 / 编程 API（SshSession）  → 编排工具
-🚧 v3.0  平台    ✅ exec/status/logs/ps/service/edit 运维原语 + 流式 + provision 全组件(install+verify) ｜ ⬜ provision 守护式 configure 精修 → 单机全生命周期
+✅ v3.0  平台    exec/status/logs/ps/service/edit 运维原语 + 流式 + provision 全组件(install+verify) + 守护式 configure → 单机全生命周期
 ⬜ v4.0  规模    inventory / 多机批量 / ink TUI / daemon + notifier      → 多机舰队 + 可视化
 ```
 

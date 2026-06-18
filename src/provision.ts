@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import { withSession } from './session'
 import type { SshSession } from './session'
 import { resolveConfig } from './config'
@@ -5,7 +6,9 @@ import { Logger } from './logger'
 import { recordAudit } from './audit'
 import { execStructured } from './ops'
 import { shellQuote } from './exec'
-import { ConfigError } from './errors'
+import { guard } from './guard'
+import { resolveLocal } from './pathmap'
+import { ConfigError, TransferError } from './errors'
 import type { RunOption, StackValue, StackSpec } from './core'
 
 /**
@@ -15,8 +18,11 @@ import type { RunOption, StackValue, StackSpec } from './core'
  * 编排器只负责「执行检测 → 算收敛步骤 → 预演或执行」，便于 fixture 单测、e2e 只验证编排/连通。
  *
  * 已交付 recipe：语言运行时 + docker（node/jdk/python/docker）+ nginx/redis/mysql（install + verify，
- * redis/mysql 支持 `mode: docker|native`、关键参数 maxmemory/rootPassword 安装时设）。守护式写配置文件
- * （复用 {@link guard}）留待下批。边界：面向固定栈的策划式 recipes（Ubuntu/Debian 优先），非通用 CM 引擎。
+ * redis/mysql 支持 `mode: docker|native`、关键参数 maxmemory/rootPassword 安装时设）。
+ *
+ * 守护式**写配置文件**：任一组件可在 stack 对象里声明 `configure`（本地文件 → 远程，附可选 `validate`/`reload`），
+ * 安装/已满足后逐条经 {@link guard} 落地（备份→写→校验→reload→失败回滚），与 `edit` 同一流水线。本地源经 SFTP
+ * 传输、明文不进命令，天然不泄漏。边界：面向固定栈的策划式 recipes（Ubuntu/Debian 优先），非通用 CM 引擎。
  *
  * 安全：编排器对外（--json / 审计）暴露前，按组件选项里的 secret 值（如 mysql rootPassword）**统一脱敏**
  * 命令与 stdout/stderr（默认安全，不靠各 recipe 记得脱敏）。原生包安装需以 root（或免密 sudo）用户连接。
@@ -32,6 +38,67 @@ export interface DetectState {
 
 /** 组件的附加选项（stack 对象形态的非 version 字段，如 redis/mysql 的 `mode`/`maxmemory`/`rootPassword`）。 */
 export type ComponentOptions = Record<string, unknown>
+
+/** 一条守护式配置写入声明（stack 组件对象的 `configure` 数组项）：本地文件 → 远程，附校验/reload。 */
+export interface ConfigSpec {
+    /** 本地源文件（相对启动目录），其内容原子替换远程文件。 */
+    file: string
+    /** 远程目标文件路径。 */
+    remote: string
+    /** 可选校验命令（如 `nginx -t`），退出码非零触发回滚。 */
+    validate?: string
+    /** 可选 reload 命令（如 `systemctl reload nginx`），失败同样回滚。 */
+    reload?: string
+}
+
+/** 一条配置写入的结果（即 {@link guard} 结果 + 本地/远程定位）。 */
+export interface ConfigResult {
+    /** 本地源文件。 */
+    file: string
+    /** 远程目标文件。 */
+    remote: string
+    /** 是否成功（写入 + 校验 + reload 全过）。 */
+    ok: boolean
+    /** 备份路径（目标原先存在才有）。 */
+    backup: string | null
+    /** 失败后是否已回滚到备份。 */
+    rolledBack: boolean
+    /** 失败原因（ok=false 时有；已按 secret 脱敏）。 */
+    error?: string
+}
+
+/**
+ * 从组件选项解析 `configure` 声明（守护式写配置文件）。缺省为空数组；形态非法则抛 {@link ConfigError}。
+ * 纯函数，便于 fixture 单测，也供编排器预检本地源文件存在。
+ */
+export const parseConfigs = (options: ComponentOptions): ConfigSpec[] => {
+    const raw = options.configure
+    if (raw === undefined) return []
+    if (!Array.isArray(raw)) {
+        throw new ConfigError('configure 必须是数组（每项 { file, remote, validate?, reload? }）')
+    }
+    return raw.map((item, i) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+            throw new ConfigError(`configure[${i}] 必须是对象（{ file, remote, validate?, reload? }）`)
+        }
+        const o = item as Record<string, unknown>
+        if (typeof o.file !== 'string' || !o.file.trim())
+            throw new ConfigError(`configure[${i}] 缺少 file（本地源文件）`)
+        if (typeof o.remote !== 'string' || !o.remote.trim()) {
+            throw new ConfigError(`configure[${i}] 缺少 remote（远程目标）`)
+        }
+        const spec: ConfigSpec = { file: o.file, remote: o.remote }
+        if (o.validate !== undefined) {
+            if (typeof o.validate !== 'string') throw new ConfigError(`configure[${i}].validate 必须是字符串`)
+            spec.validate = o.validate
+        }
+        if (o.reload !== undefined) {
+            if (typeof o.reload !== 'string') throw new ConfigError(`configure[${i}].reload 必须是字符串`)
+            spec.reload = o.reload
+        }
+        return spec
+    })
+}
 
 /** 一个收敛步骤：人类描述 + 实际远程命令。 */
 export interface PlanStep {
@@ -292,7 +359,7 @@ const redis: Recipe = {
         ]
         if (maxmemory) {
             steps.push({
-                description: `设置 maxmemory=${maxmemory}（运行时；持久化待守护式配置批）`,
+                description: `设置 maxmemory=${maxmemory}（运行时生效；持久化请用组件 configure 写 redis.conf）`,
                 command: `redis-cli config set maxmemory ${shellQuote(maxmemory)}`,
             })
         }
@@ -371,7 +438,11 @@ export interface ComponentResult {
     planned: PlanStep[]
     /** 已执行步骤的结果（预演为空）。 */
     executed: StepResult[]
-    /** 该组件是否成功（已满足、或全部步骤退出码 0）。 */
+    /** 计划写入的守护式配置（预演与实跑都给出，便于可见）。 */
+    plannedConfigs: ConfigSpec[]
+    /** 已写入配置的结果（预演为空；逐条经 {@link guard} 落地）。 */
+    configured: ConfigResult[]
+    /** 该组件是否成功（已满足/安装成功，且所有 configure 写入成功）。 */
     ok: boolean
 }
 
@@ -421,37 +492,76 @@ const provisionOne = async (
     const plan = recipe.converge(desired, detected, options)
     // 按选项里的 secret 明文值统一脱敏：命令与 stdout/stderr 对外（--json/审计）暴露前都过一遍，默认安全
     const secrets = collectSecrets(options)
+    const configs = parseConfigs(options)
     const base: ComponentResult = {
         component: recipe.component,
         desired,
         detected,
         satisfied: plan.satisfied,
         planned: plan.steps.map((s) => ({ description: s.description, command: scrubSecrets(s.command, secrets) })),
+        plannedConfigs: configs,
         executed: [],
+        configured: [],
         ok: true,
     }
-    if (dryRun || plan.satisfied) return base
+    if (dryRun) return base
     const executed: ComponentResult['executed'] = []
     let ok = true
-    for (const step of plan.steps) {
-        // 顺序执行：后续步骤依赖前序（如先装再校验）；执行真实 command，记录前脱敏
-        // eslint-disable-next-line no-await-in-loop
-        const r = await execStructured(session, step.command)
-        const stepOk = r.code === 0
-        executed.push({
-            description: step.description,
-            command: scrubSecrets(step.command, secrets),
-            stdout: scrubSecrets(r.stdout, secrets),
-            stderr: scrubSecrets(r.stderr, secrets),
-            code: r.code,
-            ok: stepOk,
-        })
-        if (!stepOk) {
-            ok = false
-            break // 步骤失败则停止该组件，避免在半成品上继续
+    // 未满足才跑安装步骤；已满足（installed）则跳过安装、但仍可能要推新配置（见下）
+    if (!plan.satisfied) {
+        for (const step of plan.steps) {
+            // 顺序执行：后续步骤依赖前序（如先装再校验）；执行真实 command，记录前脱敏
+            // eslint-disable-next-line no-await-in-loop
+            const r = await execStructured(session, step.command)
+            const stepOk = r.code === 0
+            executed.push({
+                description: step.description,
+                command: scrubSecrets(step.command, secrets),
+                stdout: scrubSecrets(r.stdout, secrets),
+                stderr: scrubSecrets(r.stderr, secrets),
+                code: r.code,
+                ok: stepOk,
+            })
+            if (!stepOk) {
+                ok = false
+                break // 步骤失败则停止该组件，避免在半成品上继续
+            }
         }
     }
-    return { ...base, executed, ok }
+    // 守护式写配置：安装成功（或已满足）后才推配置；逐条经 guard（备份→写→校验→reload→失败回滚）。
+    // 与安装状态无关——已装的服务也常要推新配置；任一文件失败即停（该文件已自动回滚到备份）。
+    const configured: ConfigResult[] = []
+    if (ok && configs.length) {
+        const sftp = await session.sftp()
+        for (const c of configs) {
+            const localFile = resolveLocal(c.file)
+            // eslint-disable-next-line no-await-in-loop
+            const g = await guard(session, {
+                target: c.remote,
+                validate: c.validate,
+                reload: c.reload,
+                apply: () =>
+                    new Promise<void>((resolve, reject) => {
+                        sftp.fastPut(localFile, c.remote, (err) =>
+                            err ? reject(new TransferError(`写入远程配置失败：${c.remote}`, { cause: err })) : resolve()
+                        )
+                    }),
+            })
+            configured.push({
+                file: c.file,
+                remote: c.remote,
+                ok: g.ok,
+                backup: g.backup,
+                rolledBack: g.rolledBack,
+                error: g.error ? scrubSecrets(g.error, secrets) : undefined,
+            })
+            if (!g.ok) {
+                ok = false
+                break
+            }
+        }
+    }
+    return { ...base, executed, configured, ok }
 }
 
 /**
@@ -475,6 +585,16 @@ export const provision = async (
     // 写护栏进 core：预演或确认二选一，CLI 与 lib 调用方都受益
     if (!config.dryRun && !yes) {
         throw new ConfigError('provision 是写操作，需 --dry-run 预演或 --yes 确认执行')
+    }
+    // 守护式写配置：实跑前预检本地源文件存在（fail-fast，避免连上后才发现缺文件）。
+    // 预演不强求文件就位（dry-run 只出计划、不写）。
+    if (!config.dryRun) {
+        for (const sel of selected) {
+            for (const c of parseConfigs(sel.options)) {
+                const localFile = resolveLocal(c.file)
+                if (!fs.existsSync(localFile)) throw new ConfigError(`configure 本地源文件不存在：${localFile}`)
+            }
+        }
     }
     const logger = new Logger({ debug: config.debug, json: config.json })
     return withSession(config.connect, logger, async (session) => {

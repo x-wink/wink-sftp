@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { provision } from '../src/provision'
 
 // 受控的 exec：按命令子串返回 stdout/退出码（与 ops.mock.test 同一桩）
@@ -6,6 +9,7 @@ const h = vi.hoisted(() => ({
     state: {
         execs: [] as string[],
         responses: [] as { match: string; stdout: string; code?: number }[],
+        puts: [] as { local: string; remote: string }[],
     },
 }))
 
@@ -37,6 +41,14 @@ vi.mock('ssh2', () => {
                 stream.emit('exit', resp?.code ?? 0)
             }, 0)
         }
+        sftp(cb: (err: unknown, sftp: unknown) => void) {
+            cb(null, {
+                fastPut(local: string, remote: string, done: (err?: unknown) => void) {
+                    h.state.puts.push({ local, remote })
+                    done()
+                },
+            })
+        }
     }
     return { Client: FakeClient }
 })
@@ -44,6 +56,7 @@ vi.mock('ssh2', () => {
 beforeEach(() => {
     h.state.execs = []
     h.state.responses = []
+    h.state.puts = []
 })
 
 const conn = { host: 'h', port: 22, username: 'u', password: 'pw' }
@@ -175,5 +188,100 @@ describe('provision 执行（--yes）', () => {
         const blob = JSON.stringify(r.components[0].executed)
         expect(blob).not.toContain('s3cret-pw') // command 与 stderr 都脱敏
         expect(blob).toContain('***')
+    })
+})
+
+describe('provision 守护式写配置（configure）', () => {
+    let confFile = ''
+    beforeEach(() => {
+        confFile = path.join(os.tmpdir(), `wink-provision-${process.pid}-${h.state.execs.length}.conf`)
+        fs.writeFileSync(confFile, 'server { listen 80; }\n')
+    })
+    afterEach(() => {
+        try {
+            fs.unlinkSync(confFile)
+        } catch {
+            /* 已删则忽略 */
+        }
+    })
+
+    it('已满足组件仍推配置：跳过安装、经 guard 写入（备份/写/校验/reload），fastPut 被调用', async () => {
+        h.state.responses = [{ match: 'nginx -v', stdout: 'nginx version: nginx/1.24.0' }] // 已装 → satisfied
+        const r = await provision(
+            base({
+                nginx: {
+                    version: 'latest',
+                    configure: [
+                        {
+                            file: confFile,
+                            remote: '/etc/nginx/nginx.conf',
+                            validate: 'nginx -t',
+                            reload: 'systemctl reload nginx',
+                        },
+                    ],
+                },
+            }),
+            { yes: true }
+        )
+        expect(r.ok).toBe(true)
+        expect(r.components[0].satisfied).toBe(true)
+        expect(r.components[0].executed).toEqual([]) // 已满足，不跑安装步骤
+        expect(r.components[0].configured).toHaveLength(1)
+        expect(r.components[0].configured[0].ok).toBe(true)
+        expect(r.components[0].configured[0].remote).toBe('/etc/nginx/nginx.conf')
+        // fastPut 真正写过；guard 跑过校验/reload
+        expect(h.state.puts).toEqual([{ local: confFile, remote: '/etc/nginx/nginx.conf' }])
+        expect(h.state.execs.some((c) => c.includes('nginx -t'))).toBe(true)
+        expect(h.state.execs.some((c) => c.includes('systemctl reload nginx'))).toBe(true)
+    })
+
+    it('dry-run：plannedConfigs 出计划、不写、不要求本地文件存在', async () => {
+        h.state.responses = [{ match: 'nginx -v', stdout: 'nginx version: nginx/1.24.0' }]
+        const r = await provision(
+            base(
+                {
+                    nginx: {
+                        version: 'latest',
+                        configure: [{ file: './does-not-exist.conf', remote: '/etc/nginx/nginx.conf' }],
+                    },
+                },
+                { dryRun: true }
+            )
+        )
+        expect(r.dryRun).toBe(true)
+        expect(r.components[0].plannedConfigs).toHaveLength(1)
+        expect(r.components[0].configured).toEqual([])
+        expect(h.state.puts).toEqual([]) // 预演不写
+    })
+
+    it('configure 校验失败 → guard 回滚、configured.ok=false、组件 ok=false', async () => {
+        h.state.responses = [
+            { match: 'nginx -v', stdout: 'nginx version: nginx/1.24.0' },
+            { match: 'nginx -t', stdout: '', code: 1 }, // 校验失败 → guard 回滚
+        ]
+        const r = await provision(
+            base({
+                nginx: {
+                    version: 'latest',
+                    configure: [{ file: confFile, remote: '/etc/nginx/nginx.conf', validate: 'nginx -t' }],
+                },
+            }),
+            { yes: true }
+        )
+        expect(r.ok).toBe(false)
+        expect(r.components[0].configured[0].ok).toBe(false)
+        expect(r.components[0].configured[0].rolledBack).toBe(true)
+    })
+
+    it('实跑缺本地源文件 → pre-flight 抛 ConfigError，不建立连接', async () => {
+        await expect(
+            provision(
+                base({
+                    nginx: { version: 'latest', configure: [{ file: './nope.conf', remote: '/etc/nginx/nginx.conf' }] },
+                }),
+                { yes: true }
+            )
+        ).rejects.toThrow(/本地源文件不存在/)
+        expect(h.state.execs).toHaveLength(0)
     })
 })

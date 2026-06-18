@@ -41,7 +41,7 @@ export type {
 } from './ops'
 export { edit } from './edit'
 export type { EditOptions, EditResult } from './edit'
-export { provision, versionSatisfies, normalizeDesired, RECIPES } from './provision'
+export { provision, versionSatisfies, normalizeDesired, parseConfigs, RECIPES } from './provision'
 export type {
     ProvisionResult,
     ComponentResult,
@@ -51,6 +51,8 @@ export type {
     PlanStep,
     ConvergePlan,
     ComponentOptions,
+    ConfigSpec,
+    ConfigResult,
 } from './provision'
 export { resolveConfig, loadConfigFile } from './config'
 export { execCommand, shellQuote } from './exec'
