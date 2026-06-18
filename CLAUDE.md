@@ -56,7 +56,7 @@ pnpm run release    # build + changelogen --release + git push（改版本/CHANG
 pnpm run release:tag # 待 main 完整门禁绿后再推 tag（git push --follow-tags），由 tag 触发发布与 GitHub Release
 ```
 
-**发布流程（必须分两步，先门禁后发版）**：① `pnpm run release` 本地改版本/CHANGELOG/提交/打 tag 并**只推 main**；② 等 `ci.yml`（lint/format/typecheck/test/build/e2e/commitlint，Node 22/24 + Node 18 冒烟）**全部绿**后，再 `pnpm run release:tag` 推送 tag 触发 `release.yml` 发布 npm + GitHub Release。**绝不在 main 门禁通过前推 tag**——否则可能发布出门禁未过的版本。
+**发布流程（必须分两步，先门禁后发版）**：① `pnpm run release` 本地改版本/CHANGELOG/提交/打 tag 并**只推 main**；② 等 `ci.yml`（lint/format/typecheck/test/build/e2e/commitlint，Node 22/24 + Node 18 冒烟）**全部绿**后，**先用 `/code-review` 审查待发版内容**（自上个稳定 tag 以来的 diff），问题修完、门禁重新绿了，再 `pnpm run release:tag` 推送 tag 触发 `release.yml` 发布 npm + GitHub Release。**绝不在 main 门禁通过前推 tag**——否则可能发布出门禁未过的版本；**也绝不跳过发布前 code-review**——`@xwink/sftp` 发到 npm 不可逆，机器门禁拦不住逻辑/设计问题，这是发布前最后一道闸。门禁没过的处理：真实失败就 fix-forward、把 tag 移到修复后的绿提交（`git tag -f` 后显式 `git push origin v<x>`）再发；flaky 则 `gh run rerun <id> --failed` 重跑、tag 不动直接发。
 
 仓库使用 **pnpm**（`.npmrc` 设 `node-linker=hoisted`，利于 ncc 打包 ssh2 原生件）。构建已不再需要 `--openssl-legacy-provider`。
 
