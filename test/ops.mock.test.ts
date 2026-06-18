@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { runExec, status, tailLogs, ps, service } from '../src/ops'
+import { runExec, status, tailLogs, followLogs, streamExec, ps, service } from '../src/ops'
 
 // 受控的 exec：按命令返回 stdout/退出码
 const h = vi.hoisted(() => ({
@@ -128,6 +128,57 @@ describe('tailLogs', () => {
         const r = await tailLogs('/var/log/app.log', { connect: conn }, { lines: Number('abc') })
         expect(r.lines).toEqual(['x'])
         expect(h.state.execs[0]).toContain('tail -n 200')
+    })
+})
+
+describe('followLogs', () => {
+    it('tail -n -f 流式按行回调；命令含 -f，路径转义', async () => {
+        h.state.responses = [{ match: 'tail -n 50 -f', stdout: 'a\nb\nc\n' }]
+        const lines: string[] = []
+        const r = await followLogs('/var/log/x', { connect: conn }, { lines: 50, onLine: (l) => lines.push(l) })
+        expect(r.ok).toBe(true)
+        expect(lines).toEqual(['a', 'b', 'c'])
+        expect(h.state.execs[0]).toBe(`tail -n 50 -f '/var/log/x'`)
+    })
+
+    it('带 grep：tail -f | grep --line-buffered，模式与路径均转义', async () => {
+        h.state.responses = [{ match: 'grep --line-buffered', stdout: 'ERR 1\nERR 2\n' }]
+        const lines: string[] = []
+        await followLogs('/var/log/x', { connect: conn }, { grep: 'ERR', onLine: (l) => lines.push(l) })
+        expect(lines).toEqual(['ERR 1', 'ERR 2'])
+        expect(h.state.execs[0]).toBe(`tail -n 200 -f '/var/log/x' | grep --line-buffered -- 'ERR'`)
+    })
+
+    it('无尾换行的残留也会在结束时冲刷为一行', async () => {
+        h.state.responses = [{ match: 'tail', stdout: 'no-newline-tail' }]
+        const lines: string[] = []
+        await followLogs('/x', { connect: conn }, { onLine: (l) => lines.push(l) })
+        expect(lines).toEqual(['no-newline-tail'])
+    })
+
+    it('非数字 -n 回退默认 200', async () => {
+        h.state.responses = [{ match: 'tail -n 200 -f', stdout: 'x\n' }]
+        const lines: string[] = []
+        await followLogs('/x', { connect: conn }, { lines: Number('abc'), onLine: (l) => lines.push(l) })
+        expect(h.state.execs[0]).toContain('tail -n 200 -f')
+        expect(lines).toEqual(['x'])
+    })
+})
+
+describe('streamExec', () => {
+    it('实时回调 stdout 数据块并透传退出码 0', async () => {
+        h.state.responses = [{ match: 'echo hi', stdout: 'hi\n' }]
+        const chunks: string[] = []
+        const r = await streamExec('echo hi', { connect: conn }, { onStdout: (c) => chunks.push(c) })
+        expect(r).toMatchObject({ ok: true, code: 0, command: 'echo hi' })
+        expect(chunks.join('')).toBe('hi\n')
+    })
+
+    it('退出码非零透传、ok=false', async () => {
+        h.state.responses = [{ match: 'false', stdout: '', code: 7 }]
+        const r = await streamExec('do false', { connect: conn })
+        expect(r.ok).toBe(false)
+        expect(r.code).toBe(7)
     })
 })
 

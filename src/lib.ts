@@ -5,6 +5,7 @@
  * 稳定的能力面：会话抽象、部署 / 下载 / 浏览、守护式变更、配置解析与类型化错误。
  */
 export { SshSession, withSession } from './session'
+export type { StreamHandle, StreamHandlers } from './session'
 export { run, runMany, runAuto, pull, ls, rollback } from './core'
 export type {
     RunOption,
@@ -23,11 +24,12 @@ export type {
 } from './core'
 export { guard, backupRemote, restoreRemote, existsRemote } from './guard'
 export type { GuardOptions, GuardResult } from './guard'
-export { runExec, status, tailLogs, ps, service } from './ops'
+export { runExec, status, tailLogs, followLogs, streamExec, ps, service } from './ops'
 export type {
     ExecRunResult,
     StatusResult,
     LogsResult,
+    StreamResult,
     DiskUsage,
     PsResult,
     ProcessInfo,

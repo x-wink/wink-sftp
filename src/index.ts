@@ -13,7 +13,17 @@ import type {
     RollbackResult,
 } from './core'
 import { runAuto, pull, ls, rollback } from './core'
-import { runExec, status, tailLogs, ps, service, SERVICE_ACTIONS, SERVICE_MANAGERS } from './ops'
+import {
+    runExec,
+    status,
+    tailLogs,
+    followLogs,
+    streamExec,
+    ps,
+    service,
+    SERVICE_ACTIONS,
+    SERVICE_MANAGERS,
+} from './ops'
 import type {
     ExecRunResult,
     StatusResult,
@@ -368,9 +378,19 @@ addConnectionOptions(program.command('ls'))
 addConnectionOptions(program.command('exec'))
     .description('在远程执行命令并收集 stdout/stderr/退出码（读/写原语）')
     .argument('<command>', '要执行的远程命令（建议用引号包裹整条命令）')
+    .option('--stream', '流式输出：实时打印 stdout/stderr（适合长流/大输出，--json 无效），退出码透传')
     .action(async (command: string, options: Record<string, unknown>) => {
         const json = Boolean(options.json)
         try {
+            if (options.stream) {
+                // 流式：原始数据块直出 stdout/stderr（持续流无法表达为单个 JSON）
+                const r = await streamExec(command, buildBase(options), {
+                    onStdout: (c) => process.stdout.write(c),
+                    onStderr: (c) => process.stderr.write(c),
+                })
+                process.exitCode = r.code // 远程退出码透传
+                return
+            }
             const result = await runExec(command, buildBase(options))
             if (json) process.stdout.write(JSON.stringify(result) + '\n')
             else renderExec(result)
@@ -389,21 +409,30 @@ addConnectionOptions(program.command('status'))
 
 // logs（日志查看）：tail -n + 可选 grep（只读）
 addConnectionOptions(program.command('logs'))
-    .description('查看远程日志：tail 末 N 行 + 可选 grep 过滤（只读）')
+    .description('查看远程日志：tail 末 N 行 + 可选 grep 过滤（只读）；--follow 持续跟随')
     .argument('<path>', '远程日志文件路径')
     .option('-n --lines <n>', '查看末尾多少行，默认 200')
     .option('--grep <pattern>', '只保留匹配该模式的行（grep）')
+    .option('-f --follow', '持续跟随新日志（tail -f），流式输出到 stdout（--json 无效），Ctrl-C 结束')
     .action(async (remotePath: string, options: Record<string, unknown>) => {
-        await execute(
-            Boolean(options.json),
-            () =>
-                tailLogs(remotePath, buildBase(options), {
-                    lines: options.lines !== undefined ? Number(options.lines) : undefined,
-                    grep: options.grep as string | undefined,
-                }),
-            renderLogs,
-            1
-        )
+        const json = Boolean(options.json)
+        const lines = options.lines !== undefined ? Number(options.lines) : undefined
+        const grep = options.grep as string | undefined
+        if (options.follow) {
+            // 流式：原始行直出 stdout（持续流无法表达为单个 JSON），由 Ctrl-C 结束
+            try {
+                const r = await followLogs(remotePath, buildBase(options), {
+                    lines,
+                    grep,
+                    onLine: (line) => process.stdout.write(line + '\n'),
+                })
+                if (!r.ok) process.exitCode = r.code > 0 ? r.code : 1
+            } catch (e) {
+                handleError(e, json)
+            }
+            return
+        }
+        await execute(json, () => tailLogs(remotePath, buildBase(options), { lines, grep }), renderLogs, 1)
     })
 
 // edit（守护式配置编辑）：用本地文件内容原子替换远程文件，失败回滚（写）

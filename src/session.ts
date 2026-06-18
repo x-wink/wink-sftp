@@ -2,8 +2,22 @@ import { Client } from 'ssh2'
 import type { ConnectConfig, SFTPWrapper } from 'ssh2'
 import { execCommand } from './exec'
 import type { ExecResult } from './exec'
-import { ConnectionError } from './errors'
+import { ConnectionError, RemoteCommandError } from './errors'
 import type { Logger } from './logger'
+
+/** 流式执行的回调：分别接收 stdout / stderr 的原始数据块（未按行切分）。 */
+export interface StreamHandlers {
+    onStdout?: (chunk: string) => void
+    onStderr?: (chunk: string) => void
+}
+
+/** {@link SshSession.stream} 的句柄：等待结束 / 主动关闭。 */
+export interface StreamHandle {
+    /** 远程命令结束（exit）时 resolve 退出码与信号。 */
+    done: Promise<{ code: number; signal?: string }>
+    /** 主动终止流（关闭通道）；长流（如 `tail -f`）由调用方据此停止。 */
+    close(): void
+}
 
 /**
  * 通用 SSH 会话抽象：包一个独立的 `ssh2.Client`，统一管理连接生命周期，
@@ -68,6 +82,41 @@ export class SshSession {
                     this.sftpWrapper = sftp
                     resolve(sftp)
                 }
+            })
+        })
+    }
+
+    /**
+     * 流式执行远程命令：实时把 stdout/stderr 数据块交给回调，返回 {@link StreamHandle}
+     * （`done` 在 exit 时 resolve 退出码/信号，`close()` 主动关闭通道）。适合 `tail -f`、`top`
+     * 等长流——不靠收集全部输出与退出码判定结束。未连接 / 无法启动 reject 类型化错误。
+     */
+    stream(command: string, handlers: StreamHandlers = {}): Promise<StreamHandle> {
+        const client = this.client
+        if (!client) return Promise.reject(new ConnectionError('SSH 会话未建立（请先 open）'))
+        return new Promise((resolve, reject) => {
+            client.exec(command, (err, stream) => {
+                if (err) {
+                    reject(new RemoteCommandError(`远程命令无法启动：${command}`, { command, cause: err }))
+                    return
+                }
+                const done = new Promise<{ code: number; signal?: string }>((res) => {
+                    stream.on('exit', (code: number | null, signal?: string) => res({ code: code ?? -1, signal }))
+                })
+                stream.on('data', (buf: Buffer) => handlers.onStdout?.(String(buf)))
+                stream.stderr.on('data', (buf: Buffer) => handlers.onStderr?.(String(buf)))
+                resolve({
+                    done,
+                    // 终止远程命令：尽力发信号 + 销毁本地通道（信号支持因服务端而异，连接关闭亦会终止远程）
+                    close: () => {
+                        try {
+                            stream.signal?.('TERM')
+                        } catch {
+                            // 信号不支持则忽略，靠 destroy / 连接关闭兜底
+                        }
+                        stream.destroy?.()
+                    },
+                })
             })
         })
     }

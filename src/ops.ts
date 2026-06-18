@@ -1,5 +1,5 @@
 import { withSession } from './session'
-import type { SshSession } from './session'
+import type { SshSession, StreamHandlers } from './session'
 import { resolveConfig } from './config'
 import { Logger } from './logger'
 import { recordAudit } from './audit'
@@ -188,6 +188,68 @@ export const tailLogs = async (
         const out = r.stdout.split(/\r?\n/)
         if (out.length && out[out.length - 1] === '') out.pop()
         return { ok: true, path: remotePath, lines: out }
+    })
+}
+
+/** `logs --follow` / `exec --stream` 等流式命令结束时的结果。 */
+export interface StreamResult {
+    /** 退出码是否为 0。 */
+    ok: boolean
+    /** 退出码（被信号终止时通常为 -1）。 */
+    code: number
+}
+
+/**
+ * 流式跟踪远程日志（`tail -n <lines> -f`，可选 `grep --line-buffered` 过滤）：每完整一行回调
+ * `onLine`，直到流结束（文件被删 / 连接关闭 / 调用方终止进程）。路径与模式经 {@link shellQuote} 防注入。
+ * 与 {@link tailLogs} 不同——不收集全部输出，适合持续跟随。需要 connect，不需要 local/remote。
+ */
+export const followLogs = async (
+    remotePath: string,
+    options: RunOption | undefined,
+    { lines = 200, grep, onLine }: { lines?: number; grep?: string; onLine: (line: string) => void }
+): Promise<StreamResult & { path: string }> => {
+    const config = resolveConfig(options, { requireLocal: false, requireRemote: false })
+    const logger = new Logger({ debug: config.debug, json: config.json })
+    const n = Number.isFinite(lines) && lines >= 1 ? Math.floor(lines) : 200
+    const target = shellQuote(remotePath)
+    // tail -f 持续输出；grep 用 --line-buffered 保证实时（否则管道按块缓冲、看不到新行）
+    const cmd = grep
+        ? `tail -n ${n} -f ${target} | grep --line-buffered -- ${shellQuote(grep)}`
+        : `tail -n ${n} -f ${target}`
+    return withSession(config.connect, logger, async (session) => {
+        let buf = ''
+        // 行缓冲：流式数据块未必对齐换行，攒够一整行才回调
+        const emit = (chunk: string): void => {
+            buf += chunk
+            let idx: number
+            while ((idx = buf.indexOf('\n')) >= 0) {
+                onLine(buf.slice(0, idx).replace(/\r$/, ''))
+                buf = buf.slice(idx + 1)
+            }
+        }
+        const handle = await session.stream(cmd, { onStdout: emit })
+        const { code } = await handle.done
+        if (buf.length) onLine(buf.replace(/\r$/, '')) // 冲刷无尾换行的残留
+        return { ok: code === 0, code, path: remotePath }
+    })
+}
+
+/**
+ * 流式远程执行：实时把 stdout/stderr 数据块交给回调，结束返回退出码。
+ * 与 {@link runExec}（收集后一次性返回）不同，适合长流 / 大输出。需要 connect，不需要 local/remote。
+ */
+export const streamExec = async (
+    command: string,
+    options?: RunOption,
+    handlers: StreamHandlers = {}
+): Promise<StreamResult & { command: string }> => {
+    const config = resolveConfig(options, { requireLocal: false, requireRemote: false })
+    const logger = new Logger({ debug: config.debug, json: config.json })
+    return withSession(config.connect, logger, async (session) => {
+        const handle = await session.stream(command, handlers)
+        const { code } = await handle.done
+        return { ok: code === 0, code, command }
     })
 }
 

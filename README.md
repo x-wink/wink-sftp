@@ -222,12 +222,16 @@ npx wink-sftp ls -c ./sftp.json
 ```bash
 # exec：远程执行一条命令，收集 stdout/stderr/退出码（退出码透传为进程退出码，便于脚本分支）
 npx wink-sftp exec 'systemctl is-active nginx' -h 1.2.3.4 -u root --connect-password '***' --json
+# exec --stream：实时流式输出（适合长流/大输出，--json 无效）
+npx wink-sftp exec 'journalctl -u nginx -f' --stream -c ./sftp.json
 
 # status：agentless 资源/健康快照（CPU 核数/负载/内存/磁盘），不在远程装任何东西
 npx wink-sftp status -c ./sftp.json --json
 
 # logs：查看远程日志末 N 行，可选 grep 过滤
 npx wink-sftp logs /var/log/nginx/error.log -n 100 --grep timeout -c ./sftp.json
+# logs --follow：持续跟随新日志（tail -f），流式到 stdout，Ctrl-C 结束
+npx wink-sftp logs /var/log/nginx/error.log -f --grep timeout -c ./sftp.json
 
 # ps：远程进程快照（PID/属主/CPU/内存/命令），可选 --grep 按命令行过滤
 npx wink-sftp ps --grep node -c ./sftp.json --json
@@ -242,9 +246,9 @@ npx wink-sftp edit /etc/nginx/nginx.conf --file ./nginx.conf \
   --validate 'nginx -t' --reload 'systemctl reload nginx' -c ./sftp.json --json
 ```
 
-- **`exec`**：诊断原语——命令退出码非零时 `ok=false` 但**不报错**，结构化返回 `{ok,command,stdout,stderr,code}`；进程退出码即远程退出码。
+- **`exec`**：诊断原语——命令退出码非零时 `ok=false` 但**不报错**，结构化返回 `{ok,command,stdout,stderr,code}`；进程退出码即远程退出码。`--stream` 实时流式输出（原始 stdout/stderr 直出、退出码透传，适合长流/大输出，与 `--json` 互斥）。
 - **`status`**：纯 SSH 解析 `hostname`/`/proc/loadavg`/`nproc`/`/proc/meminfo`/`df`，归一化为 `{host,load,cpuCores,memory,disks}`；**best-effort**，采集不到的字段为 `null`、整体仍 `ok`。跨发行版解析差异由纯函数解析层吸收（针对 Linux）。
-- **`logs`**：`tail -n <lines>`（默认 200）+ 可选 `--grep`；路径与模式自动转义。流式 `--follow` 暂未做。
+- **`logs`**：`tail -n <lines>`（默认 200）+ 可选 `--grep`；路径与模式自动转义。`-f`/`--follow` 持续跟随（`tail -f`，可叠加 `--grep`），按行流式到 stdout，Ctrl-C 结束（与 `--json` 互斥）。
 - **`ps`**：一次 `ps -A` 采集并结构化为 `{pid,ppid,user,cpu,mem,rssKb,command}` 列表；`--grep` 在**客户端**按命令行子串过滤（避免 grep 进程自身入列）。只读。
 - **`service`**：`status`（只读）/ `start`·`stop`·`restart`·`reload`（写）。`--manager systemd`（默认）`|pm2|docker`；**读写分离**：写动作须 `--yes` 确认并记本地审计，命令退出码非零作 `ok=false` 不报错。docker 不支持 `reload`。
 - **`edit`**：用本地 `--file` 内容**原子替换**远程文件，复用 `guard`；`--validate` 校验失败或 `--reload` 失败都会回滚到备份。返回 `{ok,target,backup,rolledBack,error}`。**边界**：文件级回滚，不撤销 reload 等副作用。
@@ -520,7 +524,7 @@ done
 
 ## 🗺️ 路线图
 
-`v1.x` 把「部署」做到可信、好用：v1.1 安全/正确性止血与 `--json`/`--dry-run`；v1.2 加固健壮性（并发/重试）、SSH 密钥登录与审计、deploy Skill；v1.3 提效——`pull`/`ls` 双向传输、增量、`.winksftpignore`、多环境、JSON+YAML、`${ENV_VAR}` secrets。**v2.0 升级为编排工具**：多机并行部署、文件级备份/回滚、`guard` 守护式变更原语、`SshSession` 编程式 API。**v3.0 起展开为「SSH 运维入口」**：已交付 `exec`/`status`/`logs`/`ps` 只读原语、`service` 服务管理、`edit` 守护式配置编辑，以及环境初始化 `provision`（语言运行时 + Docker 批，幂等 `--dry-run`/`--yes`）；`provision` 的 nginx/redis/mysql recipe 与 `logs --follow` 流式在后续批次推进。完整规划见 [docs/ROADMAP.md](./docs/ROADMAP.md) 与 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
+`v1.x` 把「部署」做到可信、好用：v1.1 安全/正确性止血与 `--json`/`--dry-run`；v1.2 加固健壮性（并发/重试）、SSH 密钥登录与审计、deploy Skill；v1.3 提效——`pull`/`ls` 双向传输、增量、`.winksftpignore`、多环境、JSON+YAML、`${ENV_VAR}` secrets。**v2.0 升级为编排工具**：多机并行部署、文件级备份/回滚、`guard` 守护式变更原语、`SshSession` 编程式 API。**v3.0 起展开为「SSH 运维入口」**：已交付 `exec`/`status`/`logs`/`ps` 只读原语（含 `logs --follow` / `exec --stream` 流式）、`service` 服务管理、`edit` 守护式配置编辑，以及环境初始化 `provision`（语言运行时 + Docker 批，幂等 `--dry-run`/`--yes`）；`provision` 的 nginx/redis/mysql recipe 在后续批次推进。完整规划见 [docs/ROADMAP.md](./docs/ROADMAP.md) 与 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
 
 ## 🛠️ 本地开发
 

@@ -52,6 +52,9 @@ export const startTestServer = (): Promise<TestServer> =>
     new Promise((resolve) => {
         const hostKey = generateTestKey()
         const server = new Server({ hostKeys: [hostKey] }, (client) => {
+            // 客户端骤断（流式命令结束 / 进程被杀）会让服务端 socket 抛 ECONNRESET；
+            // 测试服务端不关心，吞掉以免 unhandled 'error' 崩溃 e2e。
+            client.on('error', () => {})
             client.on('authentication', (ctx) => {
                 // 拒绝 none，逼客户端走它配置的 password / publickey，从而真实验证两条认证路径
                 if (ctx.method === 'none') return ctx.reject(['password', 'publickey'])

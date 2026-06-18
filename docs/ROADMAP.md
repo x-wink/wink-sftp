@@ -135,7 +135,8 @@ Agent 协作：
 > - ✅ **已交付（首批）**：`exec`（远程执行）、`status`（agentless 资源快照）、`logs`（tail + grep）只读原语 + `edit`（守护式配置编辑，复用 `guard`）。各有 fixture/mock 单测 + e2e（真 `/bin/sh`）。
 > - ✅ **已交付（次批）**：`ps`（进程快照，`ps -A` 解析 + 客户端 grep）+ `service`（服务管理，systemd/pm2/docker，读写分离：写动作须 `--yes` + 审计）。纯函数 + mock 单测 + e2e。
 > - ✅ **已交付（三批）**：`provision` 框架（recipe 契约 detect/parse/converge 纯函数 + 编排器 + `--dry-run`/`--yes` 写护栏 + 结构化结果 + 审计）+ **语言运行时 + Docker** recipe：`nodejs`(nvm)/`jdk`(sdkman)/`python`(pyenv)/`docker`(官方脚本)，幂等（detect→converge）。纯函数 fixture + mock 单测 + e2e（dry-run 检测 + 写护栏）。
-> - ⬜ **待做**：`provision` 的 nginx/redis/mysql recipe（守护式 `configure`，复用 `guard`）、`logs --follow` 流式。
+> - ✅ **已交付（流式）**：`SshSession.stream()` 流式底座 + `logs --follow`（`tail -f` + grep）+ `exec --stream`（实时 stdout/stderr 直出、退出码透传）。mock 单测 + e2e。
+> - ⬜ **待做**：`provision` 的 nginx/redis/mysql recipe（守护式 `configure`，复用 `guard`）。
 
 ### 环境初始化（单机 provision）— 主打
 
@@ -161,14 +162,14 @@ stack:
 
 ### 只读运维原语 — agent 诊断
 
-| 子命令          | 读/写 | 状态 | 说明                                            |
-| --------------- | ----- | ---- | ----------------------------------------------- |
-| `status`        | 读    | ✅   | 资源/健康快照（CPU/内存/磁盘/负载），`--json`   |
-| `logs`          | 读    | ✅   | `tail -n` 末 N 行 + grep（`--follow` 流式待做） |
-| `ls` / `browse` | 读    | ✅   | 远程文件浏览（v1.3 已交付）                     |
-| `exec`          | 读/写 | ✅   | 远程执行，`run()` 收集（`stream()` 流式待做）   |
-| `ps`            | 读    | ✅   | 进程快照（`ps -A` 结构化 + 客户端 grep）        |
-| `service`       | 读/写 | ✅   | 服务管理（systemd/pm2/docker），写须 `--yes`    |
+| 子命令          | 读/写 | 状态 | 说明                                          |
+| --------------- | ----- | ---- | --------------------------------------------- |
+| `status`        | 读    | ✅   | 资源/健康快照（CPU/内存/磁盘/负载），`--json` |
+| `logs`          | 读    | ✅   | `tail -n` 末 N 行 + grep；`--follow` 流式跟随 |
+| `ls` / `browse` | 读    | ✅   | 远程文件浏览（v1.3 已交付）                   |
+| `exec`          | 读/写 | ✅   | 远程执行，`run()` 收集 + `--stream` 流式直出  |
+| `ps`            | 读    | ✅   | 进程快照（`ps -A` 结构化 + 客户端 grep）      |
+| `service`       | 读/写 | ✅   | 服务管理（systemd/pm2/docker），写须 `--yes`  |
 
 - **采集 agentless**：纯 SSH 解析 `top`/`free`/`df`/`/proc`，零安装；跨发行版差异由归一化层吸收。
 - **排查 = 可组合的只读原语**：不做 `diagnose` 黑盒；输出可靠的结构化「事实」，由 agent 组合推理得「判断」。

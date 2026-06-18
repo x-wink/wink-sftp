@@ -40,8 +40,12 @@ vi.mock('ssh2', () => {
             const stream = new Emitter() as Emitter & { stderr: Emitter }
             stream.stderr = new Emitter()
             cb(null, stream)
-            // 命令含 'fail' → 退出码 1，否则 0
-            setTimeout(() => stream.emit('exit', command.includes('fail') ? 1 : 0), 0)
+            // 先吐 stdout/stderr 数据块（供 stream() 流式回调验证），命令含 'fail' → 退出码 1，否则 0
+            setTimeout(() => {
+                stream.emit('data', Buffer.from('out\n'))
+                stream.stderr.emit('data', Buffer.from('err\n'))
+                stream.emit('exit', command.includes('fail') ? 1 : 0)
+            }, 0)
         }
         sftp(cb: (err: unknown, sftp: unknown) => void) {
             h.state.sftpOpens++
@@ -93,6 +97,35 @@ describe('SshSession', () => {
     it('握手超时：reject 会话超时', async () => {
         const s = new SshSession({ host: 'slow', port: 22, username: 'u' })
         await expect(s.open()).rejects.toThrow(/会话超时/)
+    })
+
+    it('stream：实时回调 stdout/stderr 数据块，done resolve 退出码 0', async () => {
+        const s = new SshSession({ host: 'ok', port: 22, username: 'u' })
+        await s.open()
+        const out: string[] = []
+        const err: string[] = []
+        const handle = await s.stream('tail -f x', { onStdout: (c) => out.push(c), onStderr: (c) => err.push(c) })
+        const { code } = await handle.done
+        expect(code).toBe(0)
+        expect(out.join('')).toContain('out')
+        expect(err.join('')).toContain('err')
+        expect(typeof handle.close).toBe('function')
+        handle.close() // close 不抛（mock 流无 signal/destroy，靠可选链兜底）
+        s.close()
+    })
+
+    it('stream 命令含 fail：done 退出码非零', async () => {
+        const s = new SshSession({ host: 'ok', port: 22, username: 'u' })
+        await s.open()
+        const handle = await s.stream('do fail')
+        const { code } = await handle.done
+        expect(code).toBe(1)
+        s.close()
+    })
+
+    it('未 open 即 stream：reject 会话未建立', async () => {
+        const s = new SshSession({ host: 'ok', port: 22, username: 'u' })
+        await expect(s.stream('ls')).rejects.toThrow(/会话未建立/)
     })
 
     it('raw 在 open 前为 null、open 后可取、close 后回到 null', async () => {

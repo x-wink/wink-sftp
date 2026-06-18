@@ -47,6 +47,8 @@ const check = (name: string, cond: boolean, detail?: unknown): void => {
     }
 }
 
+const delay = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms))
+
 const main = async (): Promise<void> => {
     const server = await startTestServer()
     const port = String(server.port)
@@ -309,6 +311,34 @@ const main = async (): Promise<void> => {
         )
         r = await runCli(['provision', '-c', cfgBad, '--dry-run', '--json'])
         check('exit=2 && kind=config', r.code === 2 && r.json.kind === 'config', { code: r.code, json: r.json })
+
+        console.log('23) logs --follow：流式跟随，初始行 + 运行中追加的新行都收到')
+        const followFile = path.join(tmp, 'follow.log')
+        fs.writeFileSync(followFile, 'initial-line\n')
+        const cpF = spawn(process.execPath, cliArgs(['logs', followFile, '-n', '1', '--follow', ...conn(pw)]), {
+            cwd: repoRoot,
+        })
+        let fout = ''
+        cpF.on('error', () => {}) // 杀进程后管道可能报错，兜底避免 unhandled 'error'
+        cpF.stdout.on('data', (d) => (fout += d)).on('error', () => {})
+        await delay(900) // 等连接 + tail -f 起来并吐出初始行
+        fs.appendFileSync(followFile, 'streamed-line\n') // 运行中追加新行
+        await delay(900) // 等新行经 tail -f 流回
+        cpF.kill('SIGKILL') // tail -f 不会自己结束，显式终止
+        check('收到初始行与运行中追加的新行', fout.includes('initial-line') && fout.includes('streamed-line'), { fout })
+
+        console.log('24) exec --stream：流式原样输出 + 退出码透传')
+        const cpS = spawn(process.execPath, cliArgs(['exec', 'printf "s1\\ns2\\n"', '--stream', ...conn(pw)]), {
+            cwd: repoRoot,
+        })
+        let sout = ''
+        cpS.on('error', () => {})
+        cpS.stdout.on('data', (d) => (sout += d)).on('error', () => {})
+        const sCode: number = await new Promise((res) => cpS.on('close', (c) => res(c ?? -1)))
+        check('原样输出 s1/s2 且退出码 0', sout.includes('s1') && sout.includes('s2') && sCode === 0, {
+            sout,
+            sCode,
+        })
     } finally {
         await server.close()
         fs.rmSync(tmp, { recursive: true, force: true })

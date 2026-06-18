@@ -95,7 +95,7 @@ src/
 ## 五、核心抽象
 
 - **`SshSession`**：可实例化（非单例），各自持有 `Client` / 配置 / logger，支持并发与多机；部署、监控、`exec`、`logs` 共用。
-- **`exec`**：`run()` 收集后返回结构化结果（区分 stdout/stderr/退出码，参数统一转义）；`stream()` 返回异步迭代器，支撑 `tail -f`、`top` 等长流，不靠退出码判定结束。
+- **`exec`**：`run()` 收集后返回结构化结果（区分 stdout/stderr/退出码，参数统一转义）；`SshSession.stream()` 以回调（`onStdout`/`onStderr`）实时吐数据块、返回 `StreamHandle`（`done` 在 exit resolve 退出码、`close()` 主动终止），支撑 `tail -f`（`logs --follow`）、`exec --stream` 等长流，不靠退出码判定结束。
 - **结果模型**：核心返回 `DeployResult { transferred, skipped, failed[], commands[], dryRun }` 等结构化对象；监控返回归一化指标。CLI 层据此渲染与定退出码。
 - **错误模型**：类型化错误 + `cause` 链。
 
