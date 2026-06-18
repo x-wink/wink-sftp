@@ -32,6 +32,7 @@ const sftpOptionsSchema = z.object({
     clear: z.boolean().optional(),
     override: z.boolean().optional(),
     incremental: z.boolean().optional(),
+    backup: z.boolean().optional(),
     debug: z.boolean().optional(),
     // 数值字段用 coerce，兼容 ${ENV_VAR} 注入后的字符串值
     mode: z.coerce.number().optional(),

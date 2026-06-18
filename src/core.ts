@@ -1,16 +1,18 @@
-import type { Client, ConnectConfig, SFTPWrapper, Stats } from 'ssh2'
+import type { ConnectConfig, SFTPWrapper, Stats } from 'ssh2'
 import fs from 'node:fs'
 import path from 'node:path'
 import { scan, loadIgnorePatterns } from './scanner'
 import { resolveLocal, linuxPath, remoteIsDir, buildRemoteTarget, buildRemoteDir, findFlatCollisions } from './pathmap'
-import { execCommand, shellQuote } from './exec'
+import { shellQuote } from './exec'
 import { mapPool, DEFAULT_CONCURRENCY } from './pool'
 import { withRetry, DEFAULT_RETRIES } from './retry'
 import { appendAudit } from './audit'
 import { resolveConfig } from './config'
 import { Logger } from './logger'
 import { withSession } from './session'
-import { ConfigError, ConnectionError, TransferError } from './errors'
+import type { SshSession } from './session'
+import { backupRemote, restoreRemote } from './guard'
+import { ConfigError, TransferError } from './errors'
 
 export interface SftpOption {
     excludes?: string[]
@@ -21,6 +23,11 @@ export interface SftpOption {
     override?: boolean
     /** 增量传输：按 size + mtime 比对远程文件，仅传变更项（优先级高于 override）。 */
     incremental?: boolean
+    /**
+     * 文件级备份/回滚：部署前对已存在的远程目标快照（`cp -a` 到 `${remote}.wink-bak.<ts>`），
+     * 任一文件传输失败则自动回滚到快照（仅回滚文件，不撤销前后置命令等副作用）。成功则保留快照。
+     */
+    backup?: boolean
     debug?: boolean
     mode?: number
     ignoreHidden?: boolean
@@ -90,6 +97,10 @@ export interface DeployResult {
     commands: string[]
     /** 非致命告警（如 flat 模式同名覆盖）。 */
     warnings: string[]
+    /** 启用 backup 且远程目标原先存在时的快照路径；否则 null。 */
+    backup: string | null
+    /** 是否因传输失败而回滚到快照。 */
+    rolledBack: boolean
 }
 
 /** 远程目录中的一项（`ls` 结果元素）。 */
@@ -142,11 +153,6 @@ const assertSafeClearTarget = (remote: string): void => {
         throw new ConfigError(`clear 目标路径不安全，拒绝清空：${JSON.stringify(remote)}`)
     }
 }
-
-const openSftp = (client: Client): Promise<SFTPWrapper> =>
-    new Promise((resolve, reject) => {
-        client.sftp((err, sftp) => (err ? reject(new ConnectionError('SFTP 开启失败', { cause: err })) : resolve(sftp)))
-    })
 
 /** 取远程文件完整 `Stats`；不存在或出错返回 null，绝不抛错。存在性检查与增量比对共用。 */
 const statRemote = (sftp: SFTPWrapper, target: string): Promise<Stats | null> =>
@@ -225,12 +231,14 @@ const planDeploy = (config: ResolvedConfig): DeployResult => {
         dirs: remoteDirs,
         commands,
         warnings,
+        backup: null,
+        rolledBack: false,
     }
 }
 
 /** 实跑部署：建目录、传文件、跑前后命令，返回结构化结果。 */
-const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): Promise<DeployResult> => {
-    const sftp = await openSftp(client)
+const deploy = async (session: SshSession, config: ResolvedConfig, logger: Logger): Promise<DeployResult> => {
+    const sftp = await session.sftp()
     const opts = config.sftpOptions
     const commands: string[] = []
     const mode = opts.mode ?? DEFAULT_MODE
@@ -240,7 +248,7 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
     // 前置命令在扫描前执行，使其产物（如构建输出）能被纳入本次传输列表
     if (opts.beforeRunCommand) {
         logger.debug('执行前置命令：' + opts.beforeRunCommand)
-        await execCommand(client, opts.beforeRunCommand)
+        await session.exec(opts.beforeRunCommand)
         commands.push(opts.beforeRunCommand)
     }
 
@@ -248,17 +256,24 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
     logger.debug('待传输文件数：' + targets.length)
     warnings.forEach((w) => logger.warn('⚠ ' + w))
 
+    // 文件级备份：在任何变更（clear / 传输）之前对已存在的远程目标快照，供失败回滚
+    let backup: string | null = null
+    if (opts.backup) {
+        backup = await backupRemote(session, remote)
+        if (backup) logger.debug('已备份远程目标：' + backup)
+    }
+
     if (isDir && opts.clear) {
         assertSafeClearTarget(remote)
         const cmd = `rm -rf ${shellQuote(remote)}/*`
-        await execCommand(client, cmd)
+        await session.exec(cmd)
         commands.push(cmd)
         logger.debug('已清空远程文件夹：' + remote)
     }
 
     // 受限并发建目录，避免一次性打满 SSH MaxSessions
     await mapPool(remoteDirs, concurrency, async (dir) => {
-        await execCommand(client, `mkdir -p ${shellQuote(dir)}`)
+        await session.exec(`mkdir -p ${shellQuote(dir)}`)
         logger.debug('创建文件夹：' + dir)
     })
 
@@ -304,9 +319,19 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
         }
     })
 
-    if (opts.afterRunCommand) {
+    // 传输失败且有备份：回滚到快照（文件级），让远程目标恢复到部署前状态。
+    // 回滚在后置命令之前——失败时不应再执行 afterRunCommand（如重启已被回滚的服务）。
+    let rolledBack = false
+    if (failed.length > 0 && backup) {
+        logger.warn(`⚠ 传输失败，回滚到备份：${remote}`)
+        await restoreRemote(session, remote, backup)
+        rolledBack = true
+    }
+
+    // 回滚后不再执行后置命令（避免对已回滚的目标做 reload/重启）；未回滚则维持原行为
+    if (!rolledBack && opts.afterRunCommand) {
         logger.debug('执行后置命令：' + opts.afterRunCommand)
-        await execCommand(client, opts.afterRunCommand)
+        await session.exec(opts.afterRunCommand)
         commands.push(opts.afterRunCommand)
     }
 
@@ -321,15 +346,10 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
         dirs: remoteDirs,
         commands,
         warnings,
+        backup: rolledBack ? null : backup,
+        rolledBack,
     }
 }
-
-/**
- * 通用连接运行器：经 {@link withSession} 新建独立会话，在其底层 `Client` 上运行 `fn`，结束后断开。
- * 连接失败 / 超时 reject 类型化 {@link ConnectionError}。部署 / 下载 / 浏览共用。
- */
-const withConnection = <T>(connect: ConnectConfig, logger: Logger, fn: (client: Client) => Promise<T>): Promise<T> =>
-    withSession(connect, logger, (session) => fn(session.raw as Client))
 
 /** 记录一条审计；写入失败仅降级为 debug 日志，绝不中断主流程。 */
 const recordAudit = (config: ResolvedConfig, logger: Logger, ok: boolean, detail: Record<string, unknown>): void => {
@@ -362,7 +382,7 @@ export const run = async (options?: RunOption): Promise<DeployResult> => {
     logger.debug('解析后的配置：', config)
     if (config.dryRun) return planDeploy(config)
     try {
-        const result = await withConnection(config.connect, logger, (client) => deploy(client, config, logger))
+        const result = await withSession(config.connect, logger, (session) => deploy(session, config, logger))
         recordAudit(config, logger, result.ok, {
             transferred: result.transferred.length,
             skipped: result.skipped.length,
@@ -435,8 +455,8 @@ export const ls = async (options?: RunOption): Promise<LsResult> => {
     const config = resolveConfig(options, { requireLocal: false })
     const logger = new Logger({ debug: config.debug, json: config.json })
     logger.debug('解析后的配置：', config)
-    return withConnection(config.connect, logger, async (client) => {
-        const sftp = await openSftp(client)
+    return withSession(config.connect, logger, async (session) => {
+        const sftp = await session.sftp()
         const entries = await readdir(sftp, config.remote)
         return { ok: true, remote: config.remote, entries }
     })
@@ -455,8 +475,8 @@ export const pull = async (options?: RunOption): Promise<PullResult> => {
     const opts = config.sftpOptions
     const concurrency = opts.concurrency ?? DEFAULT_CONCURRENCY
     const retries = opts.retries ?? DEFAULT_RETRIES
-    return withConnection(config.connect, logger, async (client) => {
-        const sftp = await openSftp(client)
+    return withSession(config.connect, logger, async (session) => {
+        const sftp = await session.sftp()
         const stats = await statRemote(sftp, remote)
         if (!stats) throw new TransferError(`远程路径不存在：${remote}`)
 

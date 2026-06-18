@@ -97,6 +97,8 @@ const renderDeploy = (r: DeployResult): void => {
     r.warnings.forEach((w) => console.error('  ⚠ ' + w))
     console.error(`  传输 ${r.transferred.length} / 跳过 ${r.skipped.length} / 失败 ${r.failed.length}`)
     r.failed.forEach((f) => console.error(`    ✗ ${f.target}：${f.error}`))
+    if (r.rolledBack) console.error(`  ↩ 已回滚到备份：${r.remote}`)
+    else if (r.backup) console.error(`  ⛁ 已保留备份：${r.backup}`)
 }
 
 /** 把下载结果渲染为人类摘要（走 stderr）。 */
@@ -132,6 +134,7 @@ addConnectionOptions(program.command('deploy', { isDefault: true }))
     .option('--sftp-clear', '是否在传输开始前清空远程文件夹，默认为false。慎用！删错了你别怪我！')
     .option('-o --sftp-override', '是否覆盖远程文件夹中已存在的文件，默认为false')
     .option('--sftp-incremental', '增量传输：按 size+mtime 比对，只传变更文件（优先于 override）')
+    .option('--sftp-backup', '部署前对已存在的远程目标快照，传输失败自动回滚（文件级）')
     .option('-i --sftp-ignore-hidden', '是否忽略隐藏文件夹，默认为true')
     .option('-m --sftp-mode <mode>', '远程文件mode，默认为0o777')
     .option('--sftp-concurrency <n>', '传输与建目录的并发上限，默认为5')
@@ -160,6 +163,7 @@ addConnectionOptions(program.command('deploy', { isDefault: true }))
                         clear: options.sftpClear,
                         override: options.sftpOverride,
                         incremental: options.sftpIncremental,
+                        backup: options.sftpBackup,
                         ignoreHidden: options.sftpIgnoreHidden,
                         mode,
                         concurrency,

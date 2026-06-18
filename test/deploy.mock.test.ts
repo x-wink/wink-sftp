@@ -203,6 +203,26 @@ describe('deploy（mock ssh2）', () => {
         expect(firstMkdir).toBeGreaterThan(0)
     })
 
+    it('backup：部署前快照远程目标，成功后保留备份路径', async () => {
+        const r = await baseRun({ override: true, backup: true })
+        expect(r.ok).toBe(true)
+        expect(h.state.execs.some((c) => c.startsWith(`cp -a '/remote' '/remote.wink-bak.`))).toBe(true)
+        expect(r.backup).toMatch(/^\/remote\.wink-bak\./)
+        expect(r.rolledBack).toBe(false)
+    })
+
+    it('backup：传输失败自动回滚到快照，afterRunCommand 不执行', async () => {
+        h.state.failRemaining.set('/remote/a.txt', Infinity)
+        const r = await baseRun({ override: true, backup: true, afterRunCommand: 'systemctl restart app' })
+        expect(r.ok).toBe(false)
+        expect(r.rolledBack).toBe(true)
+        expect(r.backup).toBeNull()
+        expect(h.state.execs.some((c) => /^rm -rf '\/remote' && mv '\/remote\.wink-bak\..*' '\/remote'$/.test(c))).toBe(
+            true
+        )
+        expect(h.state.execs).not.toContain('systemctl restart app')
+    })
+
     it('实跑写入审计日志', async () => {
         const auditLog = path.join(localDir, 'audit.log')
         await run({
