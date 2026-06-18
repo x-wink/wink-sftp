@@ -166,21 +166,18 @@ describe('recipe: mysql（docker|native，rootPassword 脱敏）', () => {
     it('parse 取 Ver X.Y.Z', () => {
         expect(r.parse('mysqld  Ver 8.0.35 for Linux on x86_64')).toEqual({ installed: true, version: '8.0.35' })
     })
-    it('docker 模式：run 容器命令含明文密码，display 脱敏为 ***（不泄漏给 --json/审计）', () => {
+    it('docker 模式：run 容器命令含明文密码（脱敏由编排层按 secret 值统一处理）', () => {
         const plan = r.converge('8', { installed: false, version: null }, { mode: 'docker', rootPassword: 's3cret' })
         expect(plan.steps[0].command).toContain("MYSQL_ROOT_PASSWORD='s3cret'")
-        expect(plan.steps[0].display).toContain("MYSQL_ROOT_PASSWORD='***'")
-        expect(plan.steps[0].display).not.toContain('s3cret')
+        expect(plan.steps[0].command).toContain("mysql:'8'")
         expect(plan.steps[1].command).toBe('docker exec wink-mysql mysqladmin ping')
     })
     it('docker 模式缺 rootPassword → 抛错', () => {
         expect(() => r.converge('8', { installed: false, version: null }, { mode: 'docker' })).toThrow(/rootPassword/)
     })
-    it('native 模式：apt 安装 + 设密码（display 脱敏）+ ping', () => {
+    it('native 模式：apt 安装 + 设密码 + ping', () => {
         const plan = r.converge('8', { installed: false, version: null }, { rootPassword: 'pw' })
         expect(plan.steps[0].command).toContain('apt-get install -y mysql-server')
-        const setPwd = plan.steps.find((s) => s.command.includes('mysqladmin -u root password'))
-        expect(setPwd?.display).toContain("password '***'")
-        expect(setPwd?.command).toContain("password 'pw'")
+        expect(plan.steps.some((s) => s.command.includes("mysqladmin -u root password 'pw'"))).toBe(true)
     })
 })

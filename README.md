@@ -288,7 +288,7 @@ npx wink-sftp provision nodejs docker -c ./sftp.yaml --yes
 - **安全模型**：`provision` 是写操作——必须 `--dry-run`（预演）或 `--yes`（确认）二选一，二者都没有时直接拒绝。
 - **幂等**：先检测（`node --version` 等）再收敛；已满足目标版本则不执行任何步骤。版本按**点分前缀**匹配（目标 `20` 满足 `20.11.0`）。
 - **结构化结果**：`{ok,dryRun,components:[{component,desired,detected,satisfied,planned,executed,ok}]}`；步骤退出码非零作 `ok=false`、停在首个失败步骤、不报错。实跑记一条本地审计。
-- **边界**：面向固定栈的策划式 recipes（Ubuntu/Debian 优先），非通用配置管理引擎。原生包安装（nginx/redis/mysql native）需以 **root 或免密 sudo** 用户连接。
+- **边界**：面向固定栈的策划式 recipes（Ubuntu/Debian 优先），非通用配置管理引擎。原生包安装（nginx/redis/mysql native）需以 **root 或免密 sudo** 用户连接。docker 模式用固定容器名（`wink-redis`/`wink-mysql`），同机已有同名容器会冲突。
 - **secret 不外泄**：含密码的步骤（如 mysql `rootPassword`）在 `--json` / 审计里**自动脱敏**（密码替换为星号），明文只用于实际执行。
 
 | `stack` 组件 | 取值                               | 安装方式 / 说明                                                          |

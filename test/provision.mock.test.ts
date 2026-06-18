@@ -162,4 +162,18 @@ describe('provision 执行（--yes）', () => {
         expect(planned).not.toContain('s3cret-pw')
         expect(planned).toContain("MYSQL_ROOT_PASSWORD='***'")
     })
+
+    it('mysql docker 步骤失败：失败路径的 command 与回显 stderr 仍脱敏（不泄漏明文）', async () => {
+        h.state.responses = [
+            { match: 'mysqld --version', stdout: '' }, // 检测：未安装
+            { match: 'docker run', stdout: '', stderr: "boom echoing 's3cret-pw'\n", code: 1 }, // 安装失败且回显密码
+        ]
+        const r = await provision(base({ mysql: { version: 8, mode: 'docker', rootPassword: 's3cret-pw' } }), {
+            yes: true,
+        })
+        expect(r.ok).toBe(false)
+        const blob = JSON.stringify(r.components[0].executed)
+        expect(blob).not.toContain('s3cret-pw') // command 与 stderr 都脱敏
+        expect(blob).toContain('***')
+    })
 })

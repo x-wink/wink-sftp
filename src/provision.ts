@@ -18,8 +18,8 @@ import type { RunOption, StackValue, StackSpec } from './core'
  * redis/mysql 支持 `mode: docker|native`、关键参数 maxmemory/rootPassword 安装时设）。守护式写配置文件
  * （复用 {@link guard}）留待下批。边界：面向固定栈的策划式 recipes（Ubuntu/Debian 优先），非通用 CM 引擎。
  *
- * 安全：含 secret 的步骤（如 mysql rootPassword）的 {@link PlanStep.display} 为脱敏版，编排器对外
- * （--json / 审计）只暴露 display，绝不泄漏明文。原生包安装需以 root（或免密 sudo）用户连接。
+ * 安全：编排器对外（--json / 审计）暴露前，按组件选项里的 secret 值（如 mysql rootPassword）**统一脱敏**
+ * 命令与 stdout/stderr（默认安全，不靠各 recipe 记得脱敏）。原生包安装需以 root（或免密 sudo）用户连接。
  */
 
 /** 组件当前安装状态（由 recipe 的 `parse` 从检测输出归一化）。 */
@@ -36,10 +36,8 @@ export type ComponentOptions = Record<string, unknown>
 /** 一个收敛步骤：人类描述 + 实际远程命令。 */
 export interface PlanStep {
     description: string
-    /** 实际执行的远程命令。 */
+    /** 实际执行的远程命令（可含明文 secret；对外暴露前由编排层按 secret 值统一脱敏）。 */
     command: string
-    /** 对外展示/记录用命令（含 secret 时为脱敏版）；缺省同 {@link command}。绝不把含明文 secret 的 command 暴露给 --json/审计。 */
-    display?: string
 }
 
 /** 已执行步骤的结果：在 {@link PlanStep} 基础上带执行产物（退出码非零即 `ok=false`）。 */
@@ -120,8 +118,18 @@ const parseVersion = (output: string, re: RegExp): DetectState => {
     return m ? { installed: true, version: m[1] } : { installed: false, version: null }
 }
 
-/** 把步骤映射为对外可暴露形态：只取脱敏 {@link PlanStep.display}（缺省 command），不泄漏明文 secret。 */
-const toSafeStep = (s: PlanStep): PlanStep => ({ description: s.description, command: s.display ?? s.command })
+/** 选项里值视为 secret 的字段名（脱敏用）。 */
+const SECRET_KEY_RE = /pass|secret|token|pwd|credential/i
+
+/** 从组件选项收集 secret 明文值（键名命中 {@link SECRET_KEY_RE} 的字符串/数字值）。 */
+const collectSecrets = (options: ComponentOptions): string[] =>
+    Object.entries(options)
+        .filter(([k, v]) => SECRET_KEY_RE.test(k) && (typeof v === 'string' || typeof v === 'number'))
+        .map(([, v]) => String(v))
+        .filter(Boolean)
+
+/** 把文本中出现的所有 secret 明文替换为 `***`——默认安全：命令/输出统一脱敏，不靠各 recipe 记得脱敏。 */
+const scrubSecrets = (text: string, secrets: string[]): string => secrets.reduce((t, s) => t.split(s).join('***'), text)
 
 /** nvm 安装脚本（固定版本，避免随上游 HEAD 漂移）。 */
 const NVM_INSTALLER = 'https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh'
@@ -313,15 +321,13 @@ const mysql: Recipe = {
             if (!rootPassword) {
                 throw new ConfigError('mysql（docker 模式）需 rootPassword（建议用 ${ENV_VAR} 引用，不落明文）')
             }
-            const run = (pwd: string): string =>
-                `docker run -d --name ${MYSQL_CONTAINER} --restart unless-stopped -p 3306:3306 -e MYSQL_ROOT_PASSWORD=${pwd} mysql:${shellQuote(desired)}`
+            // 命令含明文密码，由编排层按 secret 值统一脱敏后才对外暴露（--json/审计）
             return {
                 satisfied: false,
                 steps: [
                     {
                         description: `启动 mysql:${desired} 容器（${MYSQL_CONTAINER}）`,
-                        command: run(shellQuote(rootPassword)),
-                        display: run(shellQuote('***')), // 脱敏：不把 root 密码暴露给 --json/审计
+                        command: `docker run -d --name ${MYSQL_CONTAINER} --restart unless-stopped -p 3306:3306 -e MYSQL_ROOT_PASSWORD=${shellQuote(rootPassword)} mysql:${shellQuote(desired)}`,
                     },
                     {
                         description: '校验 mysql 可达（mysqladmin ping）',
@@ -341,7 +347,6 @@ const mysql: Recipe = {
             steps.push({
                 description: '设置 root 密码',
                 command: `mysqladmin -u root password ${shellQuote(rootPassword)}`,
-                display: `mysqladmin -u root password ${shellQuote('***')}`, // 脱敏
             })
         }
         steps.push({ description: '校验 mysql 可达（mysqladmin ping）', command: 'mysqladmin ping' })
@@ -414,13 +419,14 @@ const provisionOne = async (
     const probe = await execStructured(session, recipe.detect(options))
     const detected = recipe.parse(probe.stdout)
     const plan = recipe.converge(desired, detected, options)
+    // 按选项里的 secret 明文值统一脱敏：命令与 stdout/stderr 对外（--json/审计）暴露前都过一遍，默认安全
+    const secrets = collectSecrets(options)
     const base: ComponentResult = {
         component: recipe.component,
         desired,
         detected,
         satisfied: plan.satisfied,
-        // 对外只暴露脱敏 display（缺省 command）：含 secret 的步骤绝不把明文 command 放进结果
-        planned: plan.steps.map(toSafeStep),
+        planned: plan.steps.map((s) => ({ description: s.description, command: scrubSecrets(s.command, secrets) })),
         executed: [],
         ok: true,
     }
@@ -428,11 +434,18 @@ const provisionOne = async (
     const executed: ComponentResult['executed'] = []
     let ok = true
     for (const step of plan.steps) {
-        // 顺序执行：后续步骤依赖前序（如先装再校验）；执行真实 command，但只记录脱敏 display
+        // 顺序执行：后续步骤依赖前序（如先装再校验）；执行真实 command，记录前脱敏
         // eslint-disable-next-line no-await-in-loop
         const r = await execStructured(session, step.command)
         const stepOk = r.code === 0
-        executed.push({ description: step.description, command: step.display ?? step.command, ...r, ok: stepOk })
+        executed.push({
+            description: step.description,
+            command: scrubSecrets(step.command, secrets),
+            stdout: scrubSecrets(r.stdout, secrets),
+            stderr: scrubSecrets(r.stderr, secrets),
+            code: r.code,
+            ok: stepOk,
+        })
         if (!stepOk) {
             ok = false
             break // 步骤失败则停止该组件，避免在半成品上继续

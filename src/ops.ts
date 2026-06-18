@@ -20,7 +20,11 @@ export const execStructured = async (
         const r = await session.exec(command)
         return { stdout: r.stdout, stderr: r.stderr, code: r.code }
     } catch (e) {
-        if (e instanceof RemoteCommandError && e.result) return e.result
+        // 仅取 stdout/stderr/code——不回传 e.result.command（明文，可能含 secret），与成功分支返回形状一致
+        if (e instanceof RemoteCommandError && e.result) {
+            const { stdout, stderr, code } = e.result
+            return { stdout, stderr, code }
+        }
         throw e // 无法启动（如命令不存在于 shell 之外）等仍按异常上抛
     }
 }

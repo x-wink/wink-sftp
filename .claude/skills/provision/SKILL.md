@@ -101,7 +101,7 @@ wink-sftp provision nodejs docker -c sftp.yaml --yes
 - `python` 建议用完整补丁号（如 `3.11.9`），传给 `pyenv install -s`。
 - `docker` 是布尔开关组件：声明 `true`/`false`，**不比版本**（已装即满足）。
 - `nginx`/`redis`/`mysql` 本批为 **install + verify**（装好 + `nginx -t` / `redis-cli ping` / `mysqladmin ping` 校验）；守护式写配置文件下批。
-- `redis`/`mysql` 的 `mode: native`（apt）按「已装即满足」（发行版版本不强比）；`mode: docker` 按镜像 tag 比版本。原生安装需 root/免密 sudo。
+- `redis`/`mysql` 的 `mode: native`（apt）按「已装即满足」（发行版版本不强比）；`mode: docker` 按镜像 tag 比版本。原生安装需 root/免密 sudo。docker 模式用固定容器名 `wink-redis`/`wink-mysql`，同机已有同名容器会冲突。
 - `mysql` docker 模式 `rootPassword` 必填（缺则报配置错误）；其明文绝不进 `--json`/审计（脱敏为星号）。
 - step 失败会停在该组件首个失败步骤、不继续；其它组件互不影响。
 
