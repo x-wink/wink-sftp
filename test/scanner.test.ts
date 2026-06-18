@@ -58,12 +58,17 @@ describe('scan', () => {
     })
 
     it('ignorePatterns 按 gitignore 风格忽略（glob + 目录剪枝）', () => {
-        const { files } = scan(root, { ignorePatterns: ['*.txt', 'node_modules/', 'sub/b.js'], ignoreHidden: false })
-        const got = files.map(rel).toSorted()
-        expect(got).toContain('a.js')
-        expect(got).not.toContain('node_modules/d.js') // 目录整体剪枝
-        expect(got).not.toContain('sub/b.js') // 精确路径
-        expect(got).not.toContain('.secret.txt') // *.txt
+        const { files, dirs } = scan(root, {
+            ignorePatterns: ['*.txt', 'node_modules/', 'sub/b.js'],
+            ignoreHidden: false,
+        })
+        const gotFiles = files.map(rel).toSorted()
+        expect(gotFiles).toContain('a.js')
+        expect(gotFiles).not.toContain('node_modules/d.js') // 目录整体剪枝
+        expect(gotFiles).not.toContain('sub/b.js') // 精确路径
+        expect(gotFiles).not.toContain('.secret.txt') // *.txt
+        // 仅匹配目录的规则（node_modules/）应连空目录一起剪掉，不留在 dirs（否则会被建到远程）
+        expect(dirs.map(rel)).not.toContain('node_modules')
     })
 })
 

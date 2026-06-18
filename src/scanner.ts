@@ -61,18 +61,21 @@ export const scan = (root: string, options: ScanOptions = {}): ScanResult => {
         return rel.split(path.sep).some((seg) => seg.startsWith('.'))
     }
 
-    // gitignore 规则匹配相对根的 POSIX 路径；根自身不参与匹配
-    const isIgnored = (abs: string): boolean => {
+    // gitignore 规则匹配相对根的 POSIX 路径；根自身不参与匹配。
+    // 目录用尾斜杠测试，使「dir/」这类仅匹配目录的规则能整目录剪枝（否则空目录仍会被建到远程）。
+    const isIgnored = (abs: string, isDir: boolean): boolean => {
         if (!ig) return false
         const rel = path.relative(root, abs)
         if (rel === '') return false
-        return ig.ignores(rel.split(path.sep).join('/'))
+        const posix = rel.split(path.sep).join('/')
+        return ig.ignores(isDir ? posix + '/' : posix)
     }
 
     const walk = (abs: string): void => {
-        if (isHidden(abs) || isIgnored(abs)) return
         if (!fs.existsSync(abs)) return
-        if (fs.statSync(abs).isDirectory()) {
+        const isDir = fs.statSync(abs).isDirectory()
+        if (isHidden(abs) || isIgnored(abs, isDir)) return
+        if (isDir) {
             res.dirs.push(abs)
             for (const name of fs.readdirSync(abs)) {
                 walk(path.join(abs, name))

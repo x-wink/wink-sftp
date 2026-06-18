@@ -116,8 +116,11 @@ const renderLs = (r: LsResult): void => {
     }
 }
 
-// deploy（默认命令，无子命令时执行；保持向后兼容）
-addConnectionOptions(program)
+// deploy（默认命令，无子命令时执行；保持向后兼容）。
+// 必须作为独立子命令而非 program 根命令——否则连接选项会与 pull/ls 子命令同名，
+// commander 会把同名选项归到父命令，导致子命令收不到连接参数。
+addConnectionOptions(program.command('deploy', { isDefault: true }))
+    .description('部署/上传本地目录到远程（无子命令时默认执行）')
     .option('-l --local <local>', '本地路径')
     .option('-r --remote <remote>', '远程路径')
     .option('--dry-run', '预演：打印将执行的动作但不建立连接、不落地')

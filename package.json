@@ -44,6 +44,7 @@
         "test": "vitest run",
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",
+        "e2e": "tsx dev/e2e/run.ts",
         "typecheck": "tsc --noEmit",
         "build": "tsc -emitDeclarationOnly && ncc build ./src/index.ts -o ./dist",
         "changelog": "changelogen --output CHANGELOG.md",

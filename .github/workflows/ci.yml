@@ -43,6 +43,11 @@ jobs:
             - name: Build
               run: pnpm run build
 
+            # 端到端：进程内起 SSH/SFTP 测试服务端，spawn 真实 CLI 跑 deploy/pull/ls/密钥/多环境
+            # （无需 Docker / 系统 sshd），覆盖单测桩覆盖不到的 commander 子命令解析
+            - name: E2E
+              run: pnpm run e2e
+
     # 事后校验提交信息符合 Conventional Commits（CHANGELOG / release 依赖）
     commitlint:
         runs-on: ubuntu-latest
