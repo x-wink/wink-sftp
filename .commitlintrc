@@ -7,20 +7,17 @@
             2,
             "always",
             [
-                "release",
+                "build",
+                "chore",
+                "ci",
+                "docs",
                 "feat",
                 "fix",
-                "doc",
-                "style",
-                "format",
-                "refactor",
-                "test",
-                "revert",
-                "build",
-                "merge",
                 "perf",
-                "conf",
-                "chore"
+                "refactor",
+                "revert",
+                "style",
+                "test"
             ]
         ],
         "type-case": [
