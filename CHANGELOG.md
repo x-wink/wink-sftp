@@ -1,3 +1,15 @@
+## v1.3.2
+
+[compare changes](https://github.com/x-wink/wink-sftp/compare/v1.3.1...v1.3.2)
+
+### 📖 Documentation
+
+- Skill 补齐至 v1.3.1 并按子命令拆分 deploy/pull ([12f6359](https://github.com/x-wink/wink-sftp/commit/12f6359))
+
+### ❤️ Contributors
+
+- Xwink <1041367524@qq.com>
+
 ## v1.3.1
 
 [compare changes](https://github.com/x-wink/wink-sftp/compare/v1.3.0...v1.3.1)
