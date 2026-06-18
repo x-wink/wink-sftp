@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { scan } from '../src/scanner'
+import { scan, loadIgnorePatterns, IGNORE_FILE } from '../src/scanner'
 
 // 注意：前缀含 `.`，且 tmpdir 路径本身常含 `.`（如 /var/folders/.../T）。
 // 这正是旧实现的 bug 触发条件——它检查整个绝对路径的每个段是否含 `.`，会误跳整棵树。
@@ -55,5 +55,50 @@ describe('scan', () => {
         const got = dirs.map(rel)
         expect(got).toContain('')
         expect(got).toContain('sub')
+    })
+
+    it('ignorePatterns 按 gitignore 风格忽略（glob + 目录剪枝）', () => {
+        const { files } = scan(root, { ignorePatterns: ['*.txt', 'node_modules/', 'sub/b.js'], ignoreHidden: false })
+        const got = files.map(rel).toSorted()
+        expect(got).toContain('a.js')
+        expect(got).not.toContain('node_modules/d.js') // 目录整体剪枝
+        expect(got).not.toContain('sub/b.js') // 精确路径
+        expect(got).not.toContain('.secret.txt') // *.txt
+    })
+})
+
+describe('loadIgnorePatterns', () => {
+    let dir: string
+    beforeAll(() => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wink-ignore-'))
+        fs.writeFileSync(path.join(dir, IGNORE_FILE), '# 注释\n\n*.log\ntmp/\n')
+    })
+    afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
+
+    it('读取 .winksftpignore 并合并内联规则，追加忽略文件自身', () => {
+        const patterns = loadIgnorePatterns(dir, ['dist/'])
+        expect(patterns).toContain('dist/')
+        expect(patterns).toContain('*.log')
+        expect(patterns).toContain('tmp/')
+        expect(patterns).toContain(IGNORE_FILE)
+    })
+
+    it('忽略文件不存在时仅返回内联规则 + 自身', () => {
+        const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'wink-noignore-'))
+        try {
+            expect(loadIgnorePatterns(empty)).toEqual([IGNORE_FILE])
+        } finally {
+            fs.rmSync(empty, { recursive: true, force: true })
+        }
+    })
+
+    it('.winksftpignore 规则经 scan 端到端生效', () => {
+        fs.writeFileSync(path.join(dir, 'keep.js'), '')
+        fs.writeFileSync(path.join(dir, 'drop.log'), '')
+        const { files } = scan(dir, { ignorePatterns: loadIgnorePatterns(dir) })
+        const got = files.map((f) => path.relative(dir, f).split(path.sep).join('/'))
+        expect(got).toContain('keep.js')
+        expect(got).not.toContain('drop.log')
+        expect(got).not.toContain(IGNORE_FILE) // 忽略文件自身不传
     })
 })

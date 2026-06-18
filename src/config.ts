@@ -26,6 +26,7 @@ const connectSchema = z.looseObject({
 
 const sftpOptionsSchema = z.object({
     excludes: z.array(z.string()).optional(),
+    ignore: z.array(z.string()).optional(),
     flat: z.boolean().optional(),
     clear: z.boolean().optional(),
     override: z.boolean().optional(),

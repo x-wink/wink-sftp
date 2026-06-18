@@ -1,6 +1,6 @@
 import { Client } from 'ssh2'
 import type { ConnectConfig, SFTPWrapper } from 'ssh2'
-import { scan } from './scanner'
+import { scan, loadIgnorePatterns } from './scanner'
 import { resolveLocal, remoteIsDir, buildRemoteTarget, buildRemoteDir, findFlatCollisions } from './pathmap'
 import { execCommand, shellQuote } from './exec'
 import { mapPool, DEFAULT_CONCURRENCY } from './pool'
@@ -12,6 +12,8 @@ import { ConfigError, ConnectionError, TransferError } from './errors'
 
 export interface SftpOption {
     excludes?: string[]
+    /** gitignore 风格忽略规则（与本地根目录下的 `.winksftpignore` 合并），按 glob 匹配。 */
+    ignore?: string[]
     flat?: boolean
     clear?: boolean
     override?: boolean
@@ -127,7 +129,8 @@ const computePlan = (config: ResolvedConfig) => {
     const local = resolveLocal(config.local)
     const { remote, sftpOptions: opts } = config
     const excludes = (opts.excludes ?? []).map((item) => resolveLocal(config.local, item))
-    const { dirs, files } = scan(local, { ignoreHidden: opts.ignoreHidden ?? true, excludes })
+    const ignorePatterns = loadIgnorePatterns(local, opts.ignore)
+    const { dirs, files } = scan(local, { ignoreHidden: opts.ignoreHidden ?? true, excludes, ignorePatterns })
     const isDir = remoteIsDir(files, remote)
     const flat = opts.flat ?? false
     const remoteDirs = flat ? [] : dirs.map((dir) => buildRemoteDir(dir, local, remote))

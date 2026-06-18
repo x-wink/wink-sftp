@@ -55,6 +55,7 @@
     },
     "dependencies": {
         "commander": "^15.0.0",
+        "ignore": "^7.0.5",
         "js-yaml": "^4.2.0",
         "ssh2": "^1.17.0",
         "zod": "^4.4.3"

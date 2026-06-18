@@ -1,11 +1,33 @@
 import path from 'node:path'
 import fs from 'node:fs'
+import ignore from 'ignore'
+
+/** 本地根目录下的忽略规则文件名（gitignore 风格）。 */
+export const IGNORE_FILE = '.winksftpignore'
 
 export interface ScanOptions {
     /** 忽略隐藏文件/目录（任意以 `.` 开头的路径段），默认 true。 */
     ignoreHidden?: boolean
     /** 要排除的绝对路径（全字匹配），默认空。 */
     excludes?: string[]
+    /** gitignore 风格忽略规则（相对扫描根，按 POSIX 路径匹配），默认空。 */
+    ignorePatterns?: string[]
+}
+
+/**
+ * 汇集忽略规则：读取本地根目录下的 `.winksftpignore`（若存在）并拼上 `inline` 规则，
+ * 再追加忽略文件自身（不上传）。空行与 `#` 注释交由 `ignore` 处理。读失败仅静默返回内联规则。
+ */
+export const loadIgnorePatterns = (root: string, inline: string[] = []): string[] => {
+    const patterns = [...inline]
+    try {
+        const file = path.join(root, IGNORE_FILE)
+        if (fs.existsSync(file)) patterns.push(...fs.readFileSync(file, 'utf8').split(/\r?\n/))
+    } catch {
+        // 读取忽略文件失败不应中断扫描
+    }
+    patterns.push(IGNORE_FILE)
+    return patterns
 }
 
 export interface ScanResult {
@@ -25,8 +47,9 @@ export interface ScanResult {
  * @param root 已解析为绝对路径的扫描根目录
  */
 export const scan = (root: string, options: ScanOptions = {}): ScanResult => {
-    const { ignoreHidden = true, excludes = [] } = options
+    const { ignoreHidden = true, excludes = [], ignorePatterns = [] } = options
     const excludeSet = new Set(excludes)
+    const ig = ignorePatterns.length ? ignore().add(ignorePatterns) : null
     const res: ScanResult = { dirs: [], files: [] }
 
     const isHidden = (abs: string): boolean => {
@@ -36,8 +59,16 @@ export const scan = (root: string, options: ScanOptions = {}): ScanResult => {
         return rel.split(path.sep).some((seg) => seg.startsWith('.'))
     }
 
+    // gitignore 规则匹配相对根的 POSIX 路径；根自身不参与匹配
+    const isIgnored = (abs: string): boolean => {
+        if (!ig) return false
+        const rel = path.relative(root, abs)
+        if (rel === '') return false
+        return ig.ignores(rel.split(path.sep).join('/'))
+    }
+
     const walk = (abs: string): void => {
-        if (excludeSet.has(abs) || isHidden(abs)) return
+        if (excludeSet.has(abs) || isHidden(abs) || isIgnored(abs)) return
         if (!fs.existsSync(abs)) return
         if (fs.statSync(abs).isDirectory()) {
             res.dirs.push(abs)
