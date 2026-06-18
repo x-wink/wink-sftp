@@ -272,8 +272,8 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
             const localStat = fs.statSync(file)
             // 增量优先：远程未变更则跳过；否则覆盖传输（不再看 override）
             if (opts.incremental) {
-                const remote = await statRemote(sftp, target)
-                if (remote && isUnchanged(localStat, remote)) {
+                const remoteInfo = await statRemote(sftp, target)
+                if (remoteInfo && isUnchanged(localStat, remoteInfo)) {
                     logger.debug('增量比对未变更，跳过：' + target)
                     skipped.push(target)
                     progress('跳过', target)
