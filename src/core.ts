@@ -148,34 +148,26 @@ const openSftp = (client: Client): Promise<SFTPWrapper> =>
         client.sftp((err, sftp) => (err ? reject(new ConnectionError('SFTP 开启失败', { cause: err })) : resolve(sftp)))
     })
 
-/** 远程文件是否存在（用 `stat`，不抛错，仅返回布尔）。 */
-const remoteExists = async (client: Client, target: string): Promise<boolean> => {
-    try {
-        await execCommand(client, `stat ${shellQuote(target)}`)
-        return true
-    } catch {
-        return false
-    }
-}
-
-/** 取远程文件完整 `Stats`；不存在或出错返回 null，绝不抛错。 */
+/** 取远程文件完整 `Stats`；不存在或出错返回 null，绝不抛错。存在性检查与增量比对共用。 */
 const statRemote = (sftp: SFTPWrapper, target: string): Promise<Stats | null> =>
     new Promise((resolve) => {
         sftp.stat(target, (err, stats: Stats) => resolve(err ? null : stats))
     })
 
-/** 取远程文件 size 与 mtime（秒）；不存在或出错返回 null，绝不抛错。 */
-const remoteStat = async (sftp: SFTPWrapper, target: string): Promise<{ size: number; mtime: number } | null> => {
-    const stats = await statRemote(sftp, target)
-    return stats ? { size: stats.size, mtime: stats.mtime } : null
-}
+/** 上传后把远程 mtime 设为本地 mtime（秒），使增量比对不受两机时钟差影响；失败仅忽略（增量退化为重传）。 */
+const setRemoteMtime = (sftp: SFTPWrapper, target: string, local: fs.Stats): Promise<void> =>
+    new Promise((resolve) => {
+        const sec = Math.floor(local.mtimeMs / 1000)
+        sftp.utimes(target, sec, sec, () => resolve())
+    })
 
 /**
- * 增量判定：远程已存在、size 相同、且远程 mtime ≥ 本地 mtime（秒）时视为未变更。
- * fastPut 不保留本地 mtime，远程 mtime 即上传时刻，故未改动的文件在重跑时必然满足。
+ * 增量判定：远程已存在、size 相同、且远程 mtime 与本地 mtime（秒）**相等**时视为未变更。
+ * 因上传后用 {@link setRemoteMtime} 把远程 mtime 对齐为本地 mtime，比较以本地时钟为唯一基准、
+ * 不依赖远程时钟，避免两机时钟偏差导致改动文件被误跳过。
  */
 const isUnchanged = (local: fs.Stats, remote: { size: number; mtime: number }): boolean =>
-    remote.size === local.size && remote.mtime >= Math.floor(local.mtimeMs / 1000)
+    remote.size === local.size && remote.mtime === Math.floor(local.mtimeMs / 1000)
 
 const fastPut = (sftp: SFTPWrapper, file: string, target: string, mode: number): Promise<void> =>
     new Promise((resolve, reject) => {
@@ -183,6 +175,12 @@ const fastPut = (sftp: SFTPWrapper, file: string, target: string, mode: number):
             err ? reject(new TransferError(`传输失败：${file} => ${target}`, { cause: err })) : resolve()
         )
     })
+
+/** 生成 `[n/total] 状态 目标` 进度回调（部署与下载共用）。 */
+const makeProgress = (logger: Logger, total: number): ((status: string, target: string) => void) => {
+    let done = 0
+    return (status, target) => logger.info(`[${++done}/${total}] ${status} ${target}`)
+}
 
 /** 计算扫描结果与基础映射（dry-run 与实跑共用）。 */
 const computePlan = (config: ResolvedConfig) => {
@@ -267,22 +265,21 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
     const transferred: string[] = []
     const skipped: string[] = []
     const failed: DeployResult['failed'] = []
-    const total = targets.length
-    let done = 0
-    const progress = (status: string, target: string) => logger.info(`[${++done}/${total}] ${status} ${target}`)
+    const progress = makeProgress(logger, targets.length)
     // 受限并发传输：同一时刻最多 concurrency 个文件在飞
     await mapPool(targets, concurrency, async ({ file, target }) => {
         try {
+            const localStat = fs.statSync(file)
             // 增量优先：远程未变更则跳过；否则覆盖传输（不再看 override）
             if (opts.incremental) {
-                const remoteInfo = await remoteStat(sftp, target)
-                if (remoteInfo && isUnchanged(fs.statSync(file), remoteInfo)) {
+                const remote = await statRemote(sftp, target)
+                if (remote && isUnchanged(localStat, remote)) {
                     logger.debug('增量比对未变更，跳过：' + target)
                     skipped.push(target)
                     progress('跳过', target)
                     return
                 }
-            } else if (!opts.override && (await remoteExists(client, target))) {
+            } else if (!opts.override && (await statRemote(sftp, target))) {
                 logger.debug('文件已存在，跳过：' + target)
                 skipped.push(target)
                 progress('跳过', target)
@@ -297,6 +294,8 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
                         `传输失败，重试 ${attempt}/${retries}：${target}（${e instanceof Error ? e.message : String(e)}）`
                     ),
             })
+            // 对齐远程 mtime，使后续 --sftp-incremental 比对以本地时钟为准
+            await setRemoteMtime(sftp, target, localStat)
             transferred.push(target)
             progress('已传', target)
         } catch (e) {
@@ -502,17 +501,15 @@ export const pull = async (options?: RunOption): Promise<PullResult> => {
             dirs = [path.dirname(localFile)]
         }
 
+        // 预先建好所有本地目录（含每个文件的父目录），传输时不再逐个 mkdir
         const uniqueDirs = [...new Set(dirs)]
         for (const d of uniqueDirs) fs.mkdirSync(d, { recursive: true })
 
         const downloaded: string[] = []
         const failed: PullResult['failed'] = []
-        const total = jobs.length
-        let done = 0
-        const progress = (status: string, target: string) => logger.info(`[${++done}/${total}] ${status} ${target}`)
+        const progress = makeProgress(logger, jobs.length)
         await mapPool(jobs, concurrency, async ({ remoteFile, localFile }) => {
             try {
-                fs.mkdirSync(path.dirname(localFile), { recursive: true })
                 await withRetry(() => fastGet(sftp, remoteFile, localFile), {
                     retries,
                     delayMs: 200,

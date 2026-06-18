@@ -62,14 +62,14 @@ pnpm run release    # build + changelogen --release --push（改版本/CHANGELOG
 - **`clear`**（`rm -rf ${remote}/*`）由 `assertSafeClearTarget` 护栏校验（拒绝空路径 / `/`）。
 - **路径**：本地用 `resolveLocal`（相对 cwd）；远程一律 POSIX，用 `linuxPath` 构造，绝不用裸 `path.join`（`pull` 镜像用 `path.posix.relative`）。`remoteIsDir` / `buildRemoteTarget` 为纯函数且对空列表安全。
 - **`ignoreHidden`** 只对相对 `local` 的路径段做 `startsWith('.')` 判定；`.winksftpignore` / `sftpOptions.ignore` 走 `ignore` 包的 gitignore 匹配。
-- **增量**（`sftpOptions.incremental`）优先于 `override`：`sftp.stat` 取远程 size+mtime，未变更则跳过。
-- **配置**：所有加载/校验/合并在 `config.ts`。zod 校验**文件**配置（编程式 `RunOption` 由 TS 保证）；`${ENV_VAR}` 在 zod 校验前注入（环境变量优先于 `.env`），缺变量抛 `ConfigError`；多环境经 `--env` + `deepMerge`。只读命令（`ls`）以 `resolveConfig(opts, { requireLocal: false })` 跳过 `local` 必填校验。
+- **增量**（`sftpOptions.incremental`）优先于 `override`：`sftp.stat` 取远程 size+mtime；上传后 `setRemoteMtime`（`sftp.utimes`）把远程 mtime 对齐为本地 mtime，`isUnchanged` 以 size 相同且 mtime **相等**判未变更（不依赖远程时钟）。存在性检查（override 跳过）也用 `statRemote`（不再用 exec shell `stat`）。
+- **配置**：所有加载/校验/合并在 `config.ts`。zod 校验**文件**配置（编程式 `RunOption` 由 TS 保证；数值字段用 `z.coerce.number` 兼容 `${ENV_VAR}` 注入的字符串）；`${ENV_VAR}` 在 zod 校验前注入（环境变量优先于 `.env`），缺变量抛 `ConfigError`。**合并优先级（高→低）**：调用级开关 ＞ 显式参数 ＞ 选中环境覆盖 ＞ 文件 ＞ 默认；即文件为基底，`--env` 环境覆盖叠加其上，命令行/编程式**显式字段**（`pickConfigFields`：connect/local/remote/sftpOptions/environments）再 `deepMerge` 覆盖，undefined 不覆盖。只读命令（`ls`）以 `resolveConfig(opts, { requireLocal: false })` 跳过 `local` 必填校验。
 - **退出码**：config 2 / connection 3 / remote-command 4 / transfer 5 / 通用 1。
 - 登录方式：密码或密钥（`connect.privateKey` / `passphrase` / `agent`）二选一，`resolveConfig` 校验至少其一；CLI `--connect-private-key` 传文件路径，由 `index.ts` 读为内容。
 
 ## CLI ↔ config mapping
 
-`src/index.ts` 把 Commander 的扁平选项映射成嵌套的 `RunOption`/`SftpOption`（`--connect-host` → `connect.host`，`--sftp-flat` → `sftpOptions.flat`）。连接与公共开关由 `addConnectionOptions` 给各子命令复用，`buildBase` 统一构造 connect/调用级开关。`mode` 按八进制、`port` 按数值解析；`--json`/`--dry-run`/`--debug`/`--env` 是调用级开关（叠加在 `-c` 配置文件之上）。审计同属调用级覆盖：CLI `--no-audit`（`options.audit === false`）与 `--audit-log` 优先于配置文件的 `audit`/`auditLog`。新增选项时须同时更新：Commander 的 `.option(...)`、`buildBase`/各 action 映射、`core.ts` 的接口、`config.ts` 的 zod schema。
+`src/index.ts` 把 Commander 的扁平选项映射成嵌套的 `RunOption`/`SftpOption`（`--connect-host` → `connect.host`，`--sftp-flat` → `sftpOptions.flat`）。连接与公共开关由 `addConnectionOptions` 给各子命令复用，`buildBase` 统一构造 connect/调用级开关。`mode` 按八进制、`port` 按数值解析；`--json`/`--dry-run`/`--debug`/`--env` 是调用级开关。配置不再「整体覆盖」：`-c` 文件为基底，显式 CLI 字段 `deepMerge` 覆盖其上（见上「配置」合并优先级），故 `-c sftp.json --remote /x` 只改 `remote`。审计同属调用级覆盖：CLI `--no-audit`（`options.audit === false`）与 `--audit-log` 优先于配置文件的 `audit`/`auditLog`。三个 action 的错误处理统一收口在 `execute()`（配置构造放进其回调，私钥读取等异常一并兜底）。新增选项时须同时更新：Commander 的 `.option(...)`、`buildBase`/各 action 映射、`core.ts` 的接口、`config.ts` 的 zod schema。
 
 > commander 15 不允许多字符短 flag：password / clear / before / after 均为长 flag（`--connect-password` / `--sftp-clear` / `--before-run-command` / `--after-run-command`）；`-h` 用作 host，帮助走 `--help`。
 

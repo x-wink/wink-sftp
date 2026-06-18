@@ -62,8 +62,13 @@ describe('loadConfigFile', () => {
     })
 
     it('字段类型非法抛 ConfigError（校验失败，含字段路径）', () => {
-        const p = write('bad.json', JSON.stringify({ connect: { port: '22' } }))
-        expect(() => loadConfigFile(p)).toThrow(/校验失败.*connect\.port/s)
+        const p = write('bad.json', JSON.stringify({ connect: { host: 123 } }))
+        expect(() => loadConfigFile(p)).toThrow(/校验失败.*connect\.host/s)
+    })
+
+    it('数值字段接受可强转的字符串（${ENV_VAR} 注入后必为字符串）', () => {
+        const p = write('num.json', JSON.stringify({ connect: { port: '2222' } }))
+        expect(loadConfigFile(p).connect?.port).toBe(2222)
     })
 
     it('未知顶层字段被静默剔除', () => {
@@ -175,6 +180,51 @@ describe('多环境 --env', () => {
     it('选了不存在的环境抛 ConfigError 并列出可用环境', () => {
         const p = write('sftp.json', JSON.stringify(multiEnv))
         expect(() => resolveConfig({ config: p, env: 'staging' })).toThrow(/未找到环境配置.*prod.*dev/s)
+    })
+
+    it('配置文件可设默认 env，未传 --env 时生效', () => {
+        const p = write('sftp.json', JSON.stringify({ ...multiEnv, env: 'prod' }))
+        expect(resolveConfig({ config: p }).connect.host).toBe('prod-host')
+    })
+
+    it('CLI/编程式 --env 覆盖文件默认 env', () => {
+        const p = write('sftp.json', JSON.stringify({ ...multiEnv, env: 'prod' }))
+        expect(resolveConfig({ config: p, env: 'dev' }).connect.host).toBe('dev-host')
+    })
+})
+
+describe('统一深度合并优先级（文件 ← 环境 ← 显式参数）', () => {
+    it('显式 remote 覆盖配置文件 remote', () => {
+        const p = write('sftp.json', JSON.stringify(validConfig))
+        expect(resolveConfig({ config: p, remote: '/override' }).remote).toBe('/override')
+    })
+
+    it('显式 connect.host 覆盖，文件其余 connect 字段保留', () => {
+        const p = write('sftp.json', JSON.stringify(validConfig))
+        const r = resolveConfig({ config: p, connect: { host: 'cli-host' } })
+        expect(r.connect.host).toBe('cli-host')
+        expect(r.connect.username).toBe('u') // 来自文件
+        expect(r.connect.password).toBe('pw') // 来自文件
+    })
+
+    it('未显式设置的字段不覆盖文件值', () => {
+        const p = write('sftp.json', JSON.stringify(validConfig))
+        // connect 全 undefined 不应抹掉文件的 host
+        const r = resolveConfig({ config: p, connect: { host: undefined } })
+        expect(r.connect.host).toBe('h')
+    })
+
+    it('显式参数优先于选中环境覆盖', () => {
+        const p = write(
+            'sftp.json',
+            JSON.stringify({
+                ...validConfig,
+                environments: { prod: { remote: '/prod', connect: { host: 'prod-host' } } },
+            })
+        )
+        const r = resolveConfig({ config: p, env: 'prod', remote: '/cli' })
+        expect(r.remote).toBe('/cli') // 显式覆盖 env 的 /prod
+        expect(r.connect.host).toBe('prod-host') // env 覆盖未被显式参数触及
     })
 })
 

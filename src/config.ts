@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import yaml from 'js-yaml'
 import { z } from 'zod'
-import type { RunOption, ResolvedConfig, SftpOption } from './core'
+import type { RunOption, ResolvedConfig, SftpOption, EnvOverride } from './core'
 import { resolveLocal } from './pathmap'
 import { defaultAuditPath } from './audit'
 import { ConfigError } from './errors'
@@ -16,7 +16,8 @@ import { ConfigError } from './errors'
  */
 const connectSchema = z.looseObject({
     host: z.string().optional(),
-    port: z.number().optional(),
+    // 数值字段用 coerce：兼容 ${ENV_VAR} 注入后必为字符串的情形（如 "22" → 22）
+    port: z.coerce.number().optional(),
     username: z.string().optional(),
     password: z.string().optional(),
     privateKey: z.string().optional(),
@@ -32,12 +33,13 @@ const sftpOptionsSchema = z.object({
     override: z.boolean().optional(),
     incremental: z.boolean().optional(),
     debug: z.boolean().optional(),
-    mode: z.number().optional(),
+    // 数值字段用 coerce，兼容 ${ENV_VAR} 注入后的字符串值
+    mode: z.coerce.number().optional(),
     ignoreHidden: z.boolean().optional(),
     beforeRunCommand: z.string().optional(),
     afterRunCommand: z.string().optional(),
-    concurrency: z.number().optional(),
-    retries: z.number().optional(),
+    concurrency: z.coerce.number().optional(),
+    retries: z.coerce.number().optional(),
 })
 
 /** 基础配置字段（也是每个环境覆盖项可包含的字段）。 */
@@ -55,6 +57,8 @@ const baseShape = {
 
 export const configSchema = z.object({
     ...baseShape,
+    // 默认选中的环境名（可被 CLI/编程式 --env 覆盖）
+    env: z.string().optional(),
     // 多环境：environments.<name> 为覆盖项，--env <name> 选中后深合并到基础配置之上
     environments: z.record(z.string(), z.object(baseShape)).optional(),
 })
@@ -176,39 +180,61 @@ export const deepMerge = <T extends Record<string, unknown>>(base: T, override: 
     return out as T
 }
 
-/**
- * 按 `options.env` 选中的环境名，把 `raw.environments[name]` 深合并到基础配置之上。
- * 未选环境时原样返回；选了但不存在该环境抛 {@link ConfigError}。
- */
-const applyEnv = (raw: RunOption, selected?: string): RunOption => {
-    if (!selected) return raw
-    const override = raw.environments?.[selected]
-    if (!override) {
-        const available = Object.keys(raw.environments ?? {})
-        throw new ConfigError(
-            `未找到环境配置：${selected}（可用环境：${available.length ? available.join('、') : '无'}）`
-        )
-    }
-    return deepMerge(raw as Record<string, unknown>, override as Record<string, unknown>) as RunOption
-}
-
 /** {@link resolveConfig} 选项：`requireLocal=false` 用于只读命令（如 `ls`），不强制 `local`。 */
 export interface ResolveOptions {
     requireLocal?: boolean
 }
 
-/** 合并配置文件 / CLI 选项并校验，返回归一化配置。校验失败抛 {@link ConfigError}。 */
+/** 参与「文件 ← 显式参数」深合并的配置字段（其余如 json/dryRun/audit 为调用级开关，单独处理）。 */
+const CONFIG_FIELDS = ['connect', 'local', 'remote', 'sftpOptions', 'environments'] as const
+
+/** 仅挑出 options 中**已显式设置**的配置字段（undefined 不参与覆盖）。 */
+const pickConfigFields = (o: RunOption): Record<string, unknown> => {
+    const out: Record<string, unknown> = {}
+    for (const k of CONFIG_FIELDS) if (o[k] !== undefined) out[k] = o[k]
+    return out
+}
+
+/**
+ * 选中环境覆盖叠加到 `base` 之上：从 `environments` 取选中项深合并。
+ * 未选环境时原样返回；选了但不存在该环境抛 {@link ConfigError}。
+ */
+const applyEnv = (base: RunOption, environments: Record<string, EnvOverride>, selected?: string): RunOption => {
+    if (!selected) return base
+    const override = environments[selected]
+    if (!override) {
+        const available = Object.keys(environments)
+        throw new ConfigError(
+            `未找到环境配置：${selected}（可用环境：${available.length ? available.join('、') : '无'}）`
+        )
+    }
+    return deepMerge(base as Record<string, unknown>, override as Record<string, unknown>) as RunOption
+}
+
+/**
+ * 合并配置并校验，返回归一化配置。校验失败抛 {@link ConfigError}。
+ *
+ * **优先级（高→低）**：调用级开关（`--json`/`--dry-run`/`--debug`/`--env`/`--no-audit`/`--audit-log`）
+ * ＞ 命令行/编程式显式配置字段 ＞ 选中环境覆盖 ＞ 配置文件基底 ＞ 默认值。
+ * 即：配置文件为基底，先叠加 `--env` 选中的环境覆盖，再把命令行/编程式**显式设置**的字段
+ * （connect/local/remote/sftpOptions）深合并覆盖其上；未设置（undefined）的字段不覆盖。
+ */
 export const resolveConfig = (
     options: RunOption = {},
     { requireLocal = true }: ResolveOptions = {}
 ): ResolvedConfig => {
     const { config = false } = options
-    // json / dryRun / debug 是调用级开关，即便用 -c 配置文件也应生效（叠加在文件之上）。
+    // 调用级开关即便用 -c 配置文件也应生效（叠加在文件之上）。
     const cliDebug = options.debug ?? false
     const cliJson = options.json ?? false
     const cliDryRun = options.dryRun ?? false
-    // env 同为调用级开关：选中的环境名来自 options（CLI/编程式），环境表来自加载后的配置
-    const raw: RunOption = applyEnv(config ? loadConfigFile(config) : options, options.env)
+    const fileCfg: RunOption = config ? loadConfigFile(config) : {}
+    // 环境表取文件与显式参数的并集（显式优先）；选中名 CLI/编程式 --env 优先于文件默认 env
+    const environments: Record<string, EnvOverride> = { ...fileCfg.environments, ...options.environments }
+    const selectedEnv = options.env ?? fileCfg.env
+    // 文件基底 → 叠加选中环境覆盖 → 显式参数覆盖其上
+    const base = applyEnv(fileCfg, environments, selectedEnv)
+    const raw: RunOption = deepMerge(base as Record<string, unknown>, pickConfigFields(options)) as RunOption
     const connect = raw.connect ?? {}
     // 密码登录或密钥登录二选一：privateKey / agent 任一存在即可，允许密码留空
     const hasAuth = Boolean(connect.password) || Boolean(connect.privateKey) || Boolean(connect.agent)

@@ -18,7 +18,7 @@ const addConnectionOptions = (cmd: Command): Command =>
         .helpOption('--help', '显示帮助信息')
         .option(
             '-c --config <path>',
-            '指定配置文件路径（相对启动目录，支持 .json/.yaml/.yml），会整体覆盖命令行连接/路径参数'
+            '指定配置文件路径（相对启动目录，支持 .json/.yaml/.yml），作为基底，显式命令行参数深合并覆盖其上'
         )
         .option('-h --connect-host <host>', '远程服务器地址')
         .option('-p --connect-port <port>', '远程服务器端口')
@@ -136,38 +136,40 @@ addConnectionOptions(program)
     .option('--before-run-command <command>', '传输开始前要执行的命令，别瞎写！')
     .option('--after-run-command <command>', '传输完成后要执行的命令，别瞎写！')
     .action(async (options: Record<string, unknown>) => {
-        const json = Boolean(options.json)
-        try {
-            const mode = options.sftpMode !== undefined ? parseInt(String(options.sftpMode), 8) : undefined
-            const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
-            const retries = options.sftpRetries !== undefined ? Number(options.sftpRetries) : undefined
-            const config: RunOption = {
-                ...buildBase(options),
-                local: options.local as string | undefined,
-                remote: options.remote as string | undefined,
-                dryRun: Boolean(options.dryRun),
-                audit: options.audit as boolean | undefined,
-                auditLog: options.auditLog as string | undefined,
-                sftpOptions: {
-                    excludes: (options.sftpExcludes as string | undefined)?.split(','),
-                    ignore: (options.sftpIgnore as string | undefined)?.split(','),
-                    flat: options.sftpFlat,
-                    clear: options.sftpClear,
-                    override: options.sftpOverride,
-                    incremental: options.sftpIncremental,
-                    ignoreHidden: options.sftpIgnoreHidden,
-                    mode,
-                    concurrency,
-                    retries,
-                    debug: options.debug,
-                    beforeRunCommand: options.beforeRunCommand,
-                    afterRunCommand: options.afterRunCommand,
-                } as SftpOption,
-            }
-            await execute(json, () => run(config), renderDeploy)
-        } catch (e) {
-            handleError(e, json)
-        }
+        // 配置构造（含可能抛错的私钥读取）放进 execute 回调，统一由其 try/catch 兜底
+        await execute(
+            Boolean(options.json),
+            () => {
+                const mode = options.sftpMode !== undefined ? parseInt(String(options.sftpMode), 8) : undefined
+                const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
+                const retries = options.sftpRetries !== undefined ? Number(options.sftpRetries) : undefined
+                const config: RunOption = {
+                    ...buildBase(options),
+                    local: options.local as string | undefined,
+                    remote: options.remote as string | undefined,
+                    dryRun: Boolean(options.dryRun),
+                    audit: options.audit as boolean | undefined,
+                    auditLog: options.auditLog as string | undefined,
+                    sftpOptions: {
+                        excludes: (options.sftpExcludes as string | undefined)?.split(','),
+                        ignore: (options.sftpIgnore as string | undefined)?.split(','),
+                        flat: options.sftpFlat,
+                        clear: options.sftpClear,
+                        override: options.sftpOverride,
+                        incremental: options.sftpIncremental,
+                        ignoreHidden: options.sftpIgnoreHidden,
+                        mode,
+                        concurrency,
+                        retries,
+                        debug: options.debug,
+                        beforeRunCommand: options.beforeRunCommand,
+                        afterRunCommand: options.afterRunCommand,
+                    } as SftpOption,
+                }
+                return run(config)
+            },
+            renderDeploy
+        )
     })
 
 // pull（下载）：把远程文件/目录拉取到本地
@@ -178,20 +180,21 @@ addConnectionOptions(program.command('pull'))
     .option('--sftp-concurrency <n>', '下载并发上限，默认为5')
     .option('--sftp-retries <n>', '单文件下载失败的额外重试次数，默认为2')
     .action(async (options: Record<string, unknown>) => {
-        const json = Boolean(options.json)
-        try {
-            const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
-            const retries = options.sftpRetries !== undefined ? Number(options.sftpRetries) : undefined
-            const config: RunOption = {
-                ...buildBase(options),
-                local: options.local as string | undefined,
-                remote: options.remote as string | undefined,
-                sftpOptions: { concurrency, retries, debug: options.debug } as SftpOption,
-            }
-            await execute(json, () => pull(config), renderPull)
-        } catch (e) {
-            handleError(e, json)
-        }
+        await execute(
+            Boolean(options.json),
+            () => {
+                const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
+                const retries = options.sftpRetries !== undefined ? Number(options.sftpRetries) : undefined
+                const config: RunOption = {
+                    ...buildBase(options),
+                    local: options.local as string | undefined,
+                    remote: options.remote as string | undefined,
+                    sftpOptions: { concurrency, retries, debug: options.debug } as SftpOption,
+                }
+                return pull(config)
+            },
+            renderPull
+        )
     })
 
 // ls（远程浏览）：列出远程目录内容（只读）
@@ -200,16 +203,18 @@ addConnectionOptions(program.command('ls'))
     .argument('[remote]', '要列出的远程目录（不带 -c 时亦可用 -r 指定）')
     .option('-r --remote <remote>', '远程目录路径')
     .action(async (remoteArg: string | undefined, options: Record<string, unknown>) => {
-        const json = Boolean(options.json)
-        try {
-            const config: RunOption = {
-                ...buildBase(options),
-                remote: (remoteArg ?? options.remote) as string | undefined,
-            }
-            await execute(json, () => ls(config), renderLs, 1)
-        } catch (e) {
-            handleError(e, json)
-        }
+        await execute(
+            Boolean(options.json),
+            () => {
+                const config: RunOption = {
+                    ...buildBase(options),
+                    remote: (remoteArg ?? options.remote) as string | undefined,
+                }
+                return ls(config)
+            },
+            renderLs,
+            1
+        )
     })
 
 program.parse()

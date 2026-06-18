@@ -48,8 +48,10 @@ export interface ScanResult {
  */
 export const scan = (root: string, options: ScanOptions = {}): ScanResult => {
     const { ignoreHidden = true, excludes = [], ignorePatterns = [] } = options
-    const excludeSet = new Set(excludes)
-    const ig = ignorePatterns.length ? ignore().add(ignorePatterns) : null
+    // excludes（绝对路径全字匹配）统一折叠为锚定到根的 gitignore 规则，与 ignorePatterns 共用一个匹配器
+    const excludePatterns = excludes.map((abs) => '/' + path.relative(root, abs).split(path.sep).join('/'))
+    const allPatterns = [...excludePatterns, ...ignorePatterns]
+    const ig = allPatterns.length ? ignore().add(allPatterns) : null
     const res: ScanResult = { dirs: [], files: [] }
 
     const isHidden = (abs: string): boolean => {
@@ -68,7 +70,7 @@ export const scan = (root: string, options: ScanOptions = {}): ScanResult => {
     }
 
     const walk = (abs: string): void => {
-        if (excludeSet.has(abs) || isHidden(abs) || isIgnored(abs)) return
+        if (isHidden(abs) || isIgnored(abs)) return
         if (!fs.existsSync(abs)) return
         if (fs.statSync(abs).isDirectory()) {
             res.dirs.push(abs)

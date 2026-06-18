@@ -12,6 +12,10 @@ const h = vi.hoisted(() => ({
         existing: new Set<string>(),
         /** target → 远程 stat（增量比对用）：size 与 mtime（秒）。 */
         remoteStats: new Map<string, { size: number; mtime: number }>(),
+        /** sftp.stat 被探测的 target（用于断言存在性检查是否发生）。 */
+        statCalls: [] as string[],
+        /** 上传后对齐 mtime：记录 utimes 调用。 */
+        utimes: [] as { target: string; mtime: number }[],
         /** target → 还需失败的次数（Infinity 表示永久失败）。 */
         failRemaining: new Map<string, number>(),
         ended: false,
@@ -61,9 +65,15 @@ vi.mock('ssh2', () => {
                     }
                 },
                 stat(target: string, done: (err: unknown, stats?: unknown) => void) {
+                    h.state.statCalls.push(target)
                     const s = h.state.remoteStats.get(target)
                     if (s) done(null, s)
+                    else if (h.state.existing.has(target)) done(null, { size: 0, mtime: 0 })
                     else done(new Error('no such file'))
+                },
+                utimes(target: string, _atime: number, mtime: number, done: (err?: unknown) => void) {
+                    h.state.utimes.push({ target, mtime })
+                    done()
                 },
             })
         }
@@ -80,6 +90,8 @@ beforeEach(() => {
     h.state.fastPuts = []
     h.state.existing = new Set()
     h.state.remoteStats = new Map()
+    h.state.statCalls = []
+    h.state.utimes = []
     h.state.failRemaining = new Map()
     h.state.ended = false
     localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wink-deploy-'))
@@ -122,7 +134,9 @@ describe('deploy（mock ssh2）', () => {
         const r = await baseRun({ override: true })
         expect(r.transferred).toHaveLength(3)
         expect(r.skipped).toEqual([])
+        // override 时不探测远程存在性（既不走 exec stat，也不走 sftp.stat）
         expect(h.state.execs.some((c) => c.startsWith('stat '))).toBe(false)
+        expect(h.state.statCalls).toEqual([])
     })
 
     it('clear=true：先执行 rm -rf 清空远程目录', async () => {
@@ -147,24 +161,39 @@ describe('deploy（mock ssh2）', () => {
         expect(r.transferred.toSorted()).toEqual(['/remote/b.txt', '/remote/sub/c.txt'])
     })
 
-    it('增量：远程未变更（size 相同、mtime 较新）则跳过，不再 fastPut', async () => {
-        const fresh = { size: 1, mtime: 9999999999 } // 1 字节、mtime 远晚于本地
-        h.state.remoteStats.set('/remote/a.txt', fresh)
-        h.state.remoteStats.set('/remote/b.txt', fresh)
-        h.state.remoteStats.set('/remote/sub/c.txt', fresh)
+    // 远程 mtime（秒）需等于本地文件 mtime 才算「未变更」（部署后由 utimes 对齐为本地 mtime）
+    const localMtimeSec = (rel: string) => Math.floor(fs.statSync(path.join(localDir, rel)).mtimeMs / 1000)
+
+    it('增量：size 相同且 mtime 与本地对齐则跳过，不再 fastPut', async () => {
+        h.state.remoteStats.set('/remote/a.txt', { size: 1, mtime: localMtimeSec('a.txt') })
+        h.state.remoteStats.set('/remote/b.txt', { size: 1, mtime: localMtimeSec('b.txt') })
+        h.state.remoteStats.set('/remote/sub/c.txt', { size: 1, mtime: localMtimeSec('sub/c.txt') })
         const r = await baseRun({ incremental: true })
         expect(r.skipped.toSorted()).toEqual(['/remote/a.txt', '/remote/b.txt', '/remote/sub/c.txt'])
         expect(r.transferred).toEqual([])
         expect(h.state.fastPuts).toEqual([])
     })
 
-    it('增量：size 不同则覆盖传输，未变更项仍跳过', async () => {
-        h.state.remoteStats.set('/remote/a.txt', { size: 999, mtime: 9999999999 }) // size 不同 → 变更
-        h.state.remoteStats.set('/remote/b.txt', { size: 1, mtime: 9999999999 }) // 未变更
+    it('增量：size 不同或 mtime 不一致则覆盖传输，未变更项仍跳过', async () => {
+        h.state.remoteStats.set('/remote/a.txt', { size: 999, mtime: localMtimeSec('a.txt') }) // size 不同 → 变更
+        h.state.remoteStats.set('/remote/b.txt', { size: 1, mtime: localMtimeSec('b.txt') }) // 未变更
         // c.txt 远程不存在（stat 返回 null）→ 传输
         const r = await baseRun({ incremental: true })
         expect(r.transferred.toSorted()).toEqual(['/remote/a.txt', '/remote/sub/c.txt'])
         expect(r.skipped).toEqual(['/remote/b.txt'])
+    })
+
+    it('增量：远程 mtime 比本地新（时钟偏差）仍判为变更并重传', async () => {
+        // 旧实现用 remote.mtime >= local 会误跳过；新实现要求相等，故重传
+        h.state.remoteStats.set('/remote/a.txt', { size: 1, mtime: localMtimeSec('a.txt') + 3600 })
+        const r = await baseRun({ incremental: true })
+        expect(r.transferred).toContain('/remote/a.txt')
+    })
+
+    it('上传后对齐远程 mtime 为本地 mtime（utimes）', async () => {
+        await baseRun({ override: true })
+        const a = h.state.utimes.find((u) => u.target === '/remote/a.txt')
+        expect(a?.mtime).toBe(localMtimeSec('a.txt'))
     })
 
     it('beforeRunCommand 在扫描/建目录之前执行', async () => {
