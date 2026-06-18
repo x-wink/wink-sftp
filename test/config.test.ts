@@ -228,6 +228,28 @@ describe('统一深度合并优先级（文件 ← 环境 ← 显式参数）', 
     })
 })
 
+describe('provision stack 配置', () => {
+    it('从文件加载 stack；未声明时为空对象', () => {
+        const p = write('sftp.json', JSON.stringify({ ...validConfig, stack: { nodejs: '20', docker: true } }))
+        expect(resolveConfig({ config: p }).stack).toEqual({ nodejs: '20', docker: true })
+        const p2 = write('plain.json', JSON.stringify(validConfig))
+        expect(resolveConfig({ config: p2 }).stack).toEqual({})
+    })
+
+    it('environments 深合并覆盖 stack（选中环境追加/覆盖组件）', () => {
+        const p = write(
+            'sftp.json',
+            JSON.stringify({
+                ...validConfig,
+                stack: { nodejs: '18' },
+                environments: { prod: { stack: { nodejs: '20', docker: true } } },
+            })
+        )
+        // 深合并：prod 覆盖 nodejs 版本并新增 docker
+        expect(resolveConfig({ config: p, env: 'prod' }).stack).toEqual({ nodejs: '20', docker: true })
+    })
+})
+
 describe('parseDotEnv', () => {
     it('解析键值、忽略注释与空行、去除引号、支持 export', () => {
         const parsed = parseDotEnv(

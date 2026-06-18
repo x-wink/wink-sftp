@@ -18,6 +18,8 @@ export type {
     RemoteEntry,
     RollbackResult,
     EnvOverride,
+    StackValue,
+    StackSpec,
 } from './core'
 export { guard, backupRemote, restoreRemote, existsRemote } from './guard'
 export type { GuardOptions, GuardResult } from './guard'
@@ -35,6 +37,8 @@ export type {
 } from './ops'
 export { edit } from './edit'
 export type { EditOptions, EditResult } from './edit'
+export { provision, versionSatisfies, normalizeDesired, RECIPES } from './provision'
+export type { ProvisionResult, ComponentResult, Recipe, DetectState, PlanStep, ConvergePlan } from './provision'
 export { resolveConfig, loadConfigFile } from './config'
 export { execCommand, shellQuote } from './exec'
 export type { ExecResult } from './exec'

@@ -12,7 +12,7 @@ import type { RunOption } from './core'
  * 「命令失败」本身就是要呈现给调用方的事实。仅连接失败 / 命令无法启动（{@link RemoteCommandError}
  * 不带 `result`）等真正异常才 reject。`runExec`/`ps`/`service` 均以此统一处理退出码语义。
  */
-const execStructured = async (
+export const execStructured = async (
     session: SshSession,
     command: string
 ): Promise<{ stdout: string; stderr: string; code: number }> => {

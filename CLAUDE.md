@@ -29,6 +29,7 @@ Source is modular under `src/`:
 - `guard.ts` — 守护式变更原语：`guard`（备份→应用→校验→reload→失败回滚，不抛错、收进 `GuardResult`）+ `backupRemote`/`restoreRemote`/`existsRemote`，依赖结构化 `ExecCapable`（`SshSession` 天然满足，便于 stub 测试）。
 - `ops.ts` — 运维原语（经 `SshSession`，需 connect 不需 local/remote）：`runExec`（远程执行，退出码非零作结构化结果不抛）、`status`（agentless 快照：一次 exec 采集 + 纯函数解析器 `parseLoadavg`/`parseMeminfo`/`parseDf` 归一化，best-effort）、`tailLogs`（`tail -n` + grep）、`ps`（`ps -A` 采集 + 纯函数 `parsePs` 解析 + 客户端 grep 过滤）、`service`（服务管理，纯函数 `buildServiceCommand` 构造 systemd/pm2/docker 命令；`status` 只读放行、写动作经 `isWriteAction` 判定须 `yes` 确认 + 记审计，退出码非零不抛）。
 - `edit.ts` — `edit`：用本地 `--file` 内容原子替换远程文件，复用 `guard`（备份→写入→`--validate`→`--reload`→失败回滚）。
+- `provision.ts` — 环境初始化（单机）：按声明式 `stack`（配置文件字段）把服务器收敛到目标栈。recipe 契约用**纯函数**描述（`detect` 检测命令 + `parse` 解析 + `converge` 收敛规划，便于 fixture 单测），编排器执行检测→算收敛步骤→预演（`--dry-run`）或执行（`--yes`，写护栏二选一）；幂等由 `converge`「已满足则空步骤」保证。本批 recipe：`nodejs`(nvm)/`jdk`(sdkman)/`python`(pyenv)/`docker`(官方脚本)；纯函数 `versionSatisfies`/`normalizeDesired` + `RECIPES` 注册表。nginx/redis/mysql（守护式 `configure` 复用 `guard`）待下批。写动作记审计。
 - `config.ts` — 配置加载与解析：zod schema（单一事实源）、JSON/YAML 双格式 `loadConfigFile`、`${ENV_VAR}` secrets 插值（`interpolateSecrets` + `.env`）、多环境 `deepMerge` 选择、多机 `hosts`、`resolveConfig`。
 - `scanner.ts` — pure local FS scan + `.winksftpignore`（`loadIgnorePatterns`，gitignore 风格 glob）。
 - `pathmap.ts` — pure path helpers (`resolveLocal` / `linuxPath` / `remoteIsDir` / `buildRemoteTarget` / `buildRemoteDir`).
@@ -66,7 +67,7 @@ pnpm run release:tag # 待 main 完整门禁绿后再推 tag（git push --follow
 
 ## Architecture
 
-`run(options)` 解析配置后，分两路：`--dry-run` 走 `planDeploy`（纯本地计算、不连接），否则经 `withSession`（`session.ts`）新建一个**每次独立的** `SshSession`（内含独立 `ssh2.Client`）跑 `deploy`。`pull` / `ls` / `exec` / `status` / `logs` / `ps` / `service` / `edit` 同样复用 `withSession`。各命令返回各自的结构化结果（`DeployResult` / `MultiDeployResult` / `RollbackResult` / `PullResult` / `LsResult` / `ExecRunResult` / `StatusResult` / `LogsResult` / `PsResult` / `ServiceResult` / `EditResult`），由 CLI 层渲染并据此定退出码。
+`run(options)` 解析配置后，分两路：`--dry-run` 走 `planDeploy`（纯本地计算、不连接），否则经 `withSession`（`session.ts`）新建一个**每次独立的** `SshSession`（内含独立 `ssh2.Client`）跑 `deploy`。`pull` / `ls` / `exec` / `status` / `logs` / `ps` / `service` / `edit` / `provision` 同样复用 `withSession`。各命令返回各自的结构化结果（`DeployResult` / `MultiDeployResult` / `RollbackResult` / `PullResult` / `LsResult` / `ExecRunResult` / `StatusResult` / `LogsResult` / `PsResult` / `ServiceResult` / `EditResult` / `ProvisionResult`），由 CLI 层渲染并据此定退出码。
 
 编辑时须注意：
 

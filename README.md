@@ -31,6 +31,7 @@
 - 🚀 一条命令把本地目录递归部署到远程
 - ⬇️ 双向传输：`pull` 下载远程文件/目录、`ls` 浏览远程目录（只读）
 - 🩺 运维原语：`exec` 远程执行、`status` 资源快照（agentless）、`logs` 日志（tail+grep）、`ps` 进程快照、`service` 服务管理、`edit` 守护式配置编辑
+- 🧱 环境初始化：`provision` 按 `stack` 声明收敛服务器（node/jdk/python/docker），幂等、`--dry-run` 预演 / `--yes` 执行
 - 📄 JSON / YAML 配置文件（zod 校验），便于纳入版本管理与多项目复用
 - 🌐 多环境配置：单文件内放 `dev` / `test` / `prod`，`--env prod` 选择并深合并
 - 🔐 secrets 用 `${ENV_VAR}` 引用，从环境变量 / `.env` 注入，配置不落明文
@@ -149,6 +150,7 @@ npx wink-sftp -c ./sftp.json
 | `sftpOptions.retries`          | number   | `2`     | 单文件传输失败的额外重试次数（线性退避）                             |
 | `sftpOptions.beforeRunCommand` | string   | —       | 传输开始前执行的远程命令（在扫描前执行）                             |
 | `sftpOptions.afterRunCommand`  | string   | —       | 传输完成后执行的远程命令                                             |
+| `stack`                        | object   | —       | provision 声明式栈：`{ nodejs/python/jdk/docker: 版本或开关 }`       |
 | `environments`                 | object   | —       | 多环境覆盖表：`{ <env>: { 同上字段 } }`，`--env` 选择                |
 | `hosts`                        | object[] | —       | 多机部署：每台主机的连接覆盖（叠加到 `connect` 之上，至少含 `host`） |
 | `failFast`                     | boolean  | `false` | 多机失败策略：`true` 首台失败即停；`false` 跑完所有主机再汇总        |
@@ -246,6 +248,47 @@ npx wink-sftp edit /etc/nginx/nginx.conf --file ./nginx.conf \
 - **`ps`**：一次 `ps -A` 采集并结构化为 `{pid,ppid,user,cpu,mem,rssKb,command}` 列表；`--grep` 在**客户端**按命令行子串过滤（避免 grep 进程自身入列）。只读。
 - **`service`**：`status`（只读）/ `start`·`stop`·`restart`·`reload`（写）。`--manager systemd`（默认）`|pm2|docker`；**读写分离**：写动作须 `--yes` 确认并记本地审计，命令退出码非零作 `ok=false` 不报错。docker 不支持 `reload`。
 - **`edit`**：用本地 `--file` 内容**原子替换**远程文件，复用 `guard`；`--validate` 校验失败或 `--reload` 失败都会回滚到备份。返回 `{ok,target,backup,rolledBack,error}`。**边界**：文件级回滚，不撤销 reload 等副作用。
+
+## 🧱 环境初始化（provision）
+
+按配置文件 `stack` 声明把单台服务器**收敛**到目标栈状态——检测当前版本，未达标才安装。**幂等**：已满足的组件自动跳过。本批支持语言运行时 + Docker：`nodejs`（nvm）/ `jdk`（sdkman）/ `python`（pyenv）/ `docker`（官方脚本）；`nginx`/`redis`/`mysql` 等需守护式配置的组件下批推进。
+
+```yaml
+# sftp.yaml — 与部署共用 connect，新增 stack 段
+connect:
+    host: 1.2.3.4
+    port: 22
+    username: root
+    password: ${SSH_PWD}
+stack:
+    nodejs: '20' # 经 nvm 安装并设为默认
+    python: '3.11.9' # 经 pyenv 安装并设为全局（建议用完整补丁号）
+    jdk: '17.0.9-tem' # 经 sdkman 安装（用 sdkman 候选标识）
+    docker: true # 官方脚本安装；false 则跳过该组件
+```
+
+```bash
+# 预演：检测当前状态并打印将执行的步骤，不落地（强烈建议先跑）
+npx wink-sftp provision -c ./sftp.yaml --dry-run --json
+
+# 确认执行（写操作，必须 --dry-run 预演或 --yes 确认其一，否则拒绝）
+npx wink-sftp provision -c ./sftp.yaml --yes
+
+# 只处理指定组件（位置参数限定子集）
+npx wink-sftp provision nodejs docker -c ./sftp.yaml --yes
+```
+
+- **安全模型**：`provision` 是写操作——必须 `--dry-run`（预演）或 `--yes`（确认）二选一，二者都没有时直接拒绝。
+- **幂等**：先检测（`node --version` 等）再收敛；已满足目标版本则不执行任何步骤。版本按**点分前缀**匹配（目标 `20` 满足 `20.11.0`）。
+- **结构化结果**：`{ok,dryRun,components:[{component,desired,detected,satisfied,planned,executed,ok}]}`；步骤退出码非零作 `ok=false`、停在首个失败步骤、不报错。实跑记一条本地审计。
+- **边界**：面向固定栈的策划式 recipes（Ubuntu/Debian 优先），非通用配置管理引擎。
+
+| `stack` 组件 | 取值                    | 版本管理器 / 安装方式    |
+| ------------ | ----------------------- | ------------------------ |
+| `nodejs`     | 版本号（如 `'20'`）     | nvm                      |
+| `python`     | 版本号（如 `'3.11.9'`） | pyenv                    |
+| `jdk`        | sdkman 标识（`17-tem`） | sdkman                   |
+| `docker`     | `true` / `false`        | 官方安装脚本（不比版本） |
 
 ## 🌐 多环境配置
 
@@ -475,7 +518,7 @@ done
 
 ## 🗺️ 路线图
 
-`v1.x` 把「部署」做到可信、好用：v1.1 安全/正确性止血与 `--json`/`--dry-run`；v1.2 加固健壮性（并发/重试）、SSH 密钥登录与审计、deploy Skill；v1.3 提效——`pull`/`ls` 双向传输、增量、`.winksftpignore`、多环境、JSON+YAML、`${ENV_VAR}` secrets。**v2.0 升级为编排工具**：多机并行部署、文件级备份/回滚、`guard` 守护式变更原语、`SshSession` 编程式 API。**v3.0 起展开为「SSH 运维入口」**：已交付 `exec`/`status`/`logs` 只读原语与 `edit` 守护式配置编辑；环境初始化 `provision` 与进程/服务管理 `ps`/`service` 在后续批次推进。完整规划见 [docs/ROADMAP.md](./docs/ROADMAP.md) 与 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
+`v1.x` 把「部署」做到可信、好用：v1.1 安全/正确性止血与 `--json`/`--dry-run`；v1.2 加固健壮性（并发/重试）、SSH 密钥登录与审计、deploy Skill；v1.3 提效——`pull`/`ls` 双向传输、增量、`.winksftpignore`、多环境、JSON+YAML、`${ENV_VAR}` secrets。**v2.0 升级为编排工具**：多机并行部署、文件级备份/回滚、`guard` 守护式变更原语、`SshSession` 编程式 API。**v3.0 起展开为「SSH 运维入口」**：已交付 `exec`/`status`/`logs`/`ps` 只读原语、`service` 服务管理、`edit` 守护式配置编辑，以及环境初始化 `provision`（语言运行时 + Docker 批，幂等 `--dry-run`/`--yes`）；`provision` 的 nginx/redis/mysql recipe 与 `logs --follow` 流式在后续批次推进。完整规划见 [docs/ROADMAP.md](./docs/ROADMAP.md) 与 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
 
 ## 🛠️ 本地开发
 

@@ -7,7 +7,8 @@ import { spawn } from 'node:child_process'
 import { startTestServer, generateTestKey } from './server'
 
 const repoRoot = process.cwd()
-const tsxBin = path.resolve(repoRoot, 'node_modules/.bin/tsx')
+// 经 `node --import tsx` 跑 CLI：跨平台稳健（不依赖 .bin/.cmd shim，Windows/Linux 一致）
+const cliArgs = (args: string[]): string[] => ['--import', 'tsx', 'src/index.ts', ...args]
 
 interface CliResult {
     code: number
@@ -17,7 +18,7 @@ interface CliResult {
 
 const runCli = (args: string[]): Promise<CliResult> =>
     new Promise((resolve) => {
-        const cp = spawn(tsxBin, ['src/index.ts', ...args], { cwd: repoRoot })
+        const cp = spawn(process.execPath, cliArgs(args), { cwd: repoRoot })
         let out = ''
         let err = ''
         cp.stdout.on('data', (d) => (out += d))
@@ -267,6 +268,47 @@ const main = async (): Promise<void> => {
         console.log('19) service 写动作缺 --yes → 退出码 2 / kind=config（读写护栏）')
         r = await runCli(['service', 'nginx', 'restart', '--json', ...conn(pw)])
         check('exit=2 && kind=config', r.code === 2 && r.json.kind === 'config', { code: r.code, json: r.json })
+
+        console.log('20) provision --dry-run：检测真 shell + 出计划（不执行 --yes，避免真安装）')
+        const cfgProv = path.join(tmp, 'stack.json')
+        fs.writeFileSync(
+            cfgProv,
+            JSON.stringify({
+                connect: { host: '127.0.0.1', port: Number(port), username: 'tester', password: 'pw' },
+                stack: { docker: true },
+            })
+        )
+        r = await runCli(['provision', '-c', cfgProv, '--dry-run', '--json'])
+        const comps = r.json.components as
+            | { component: string; executed: unknown[]; detected: { installed: boolean } }[]
+            | undefined
+        check(
+            'ok && dryRun && 含 docker 组件且预演不执行步骤',
+            r.json.ok === true &&
+                r.json.dryRun === true &&
+                Array.isArray(comps) &&
+                comps.length === 1 &&
+                comps[0].component === 'docker' &&
+                comps[0].executed.length === 0 &&
+                typeof comps[0].detected.installed === 'boolean',
+            r.json
+        )
+
+        console.log('21) provision 写护栏：既无 --dry-run 也无 --yes → 退出码 2 / kind=config')
+        r = await runCli(['provision', '-c', cfgProv, '--json'])
+        check('exit=2 && kind=config', r.code === 2 && r.json.kind === 'config', { code: r.code, json: r.json })
+
+        console.log('22) provision 不支持的组件 → 退出码 2 / kind=config')
+        const cfgBad = path.join(tmp, 'stack-bad.json')
+        fs.writeFileSync(
+            cfgBad,
+            JSON.stringify({
+                connect: { host: '127.0.0.1', port: Number(port), username: 'tester', password: 'pw' },
+                stack: { redis: 7 },
+            })
+        )
+        r = await runCli(['provision', '-c', cfgBad, '--dry-run', '--json'])
+        check('exit=2 && kind=config', r.code === 2 && r.json.kind === 'config', { code: r.code, json: r.json })
     } finally {
         await server.close()
         fs.rmSync(tmp, { recursive: true, force: true })
@@ -279,7 +321,7 @@ const main = async (): Promise<void> => {
 // 带额外环境变量跑 CLI（用于 secrets 注入用例）
 const runCliEnv = (args: string[], extraEnv: Record<string, string>): Promise<CliResult> =>
     new Promise((resolve) => {
-        const cp = spawn(tsxBin, ['src/index.ts', ...args], { cwd: repoRoot, env: { ...process.env, ...extraEnv } })
+        const cp = spawn(process.execPath, cliArgs(args), { cwd: repoRoot, env: { ...process.env, ...extraEnv } })
         let out = ''
         let err = ''
         cp.stdout.on('data', (d) => (out += d))

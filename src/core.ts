@@ -39,11 +39,18 @@ export interface SftpOption {
     retries?: number
 }
 
+/** stack 中单个组件的声明值：版本字符串/数字、布尔开关，或带 `version` 的对象。 */
+export type StackValue = string | number | boolean | Record<string, unknown>
+/** 声明式 stack（provision）：组件名 → 声明值。 */
+export type StackSpec = Record<string, StackValue>
+
 export interface RunOption {
     connect?: ConnectConfig
     local?: string
     remote?: string
     sftpOptions?: SftpOption
+    /** provision 声明式 stack：组件名 → 目标版本/开关（参与配置合并，可经 environments 覆盖）。 */
+    stack?: StackSpec
     debug?: boolean
     config?: string | false
     /** JSON 模式：结果走 stdout。 */
@@ -74,6 +81,8 @@ export interface ResolvedConfig {
     local: string
     remote: string
     sftpOptions: SftpOption
+    /** provision 声明式 stack（无则为空对象）。 */
+    stack: StackSpec
     debug: boolean
     json: boolean
     dryRun: boolean

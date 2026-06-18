@@ -25,6 +25,8 @@ import type {
 } from './ops'
 import { edit } from './edit'
 import type { EditResult } from './edit'
+import { provision } from './provision'
+import type { ProvisionResult } from './provision'
 import { ConfigError, exitCodeOf, WinkSftpError } from './errors'
 
 const program = new Command()
@@ -210,6 +212,25 @@ const renderService = (r: ServiceResult): void => {
     console.error(`${r.manager} ${r.action} ${r.service} → 退出码 ${r.code}`)
     if (r.stdout) process.stderr.write(r.stdout.endsWith('\n') ? r.stdout : r.stdout + '\n')
     if (r.stderr) process.stderr.write(r.stderr.endsWith('\n') ? r.stderr : r.stderr + '\n')
+}
+
+/** 把环境初始化结果渲染为人类摘要（走 stderr）。 */
+const renderProvision = (r: ProvisionResult): void => {
+    console.error(r.dryRun ? '【预演】环境初始化计划：' : '环境初始化完成：')
+    for (const c of r.components) {
+        const cur = c.detected.installed ? c.detected.version : '未安装'
+        if (c.satisfied) {
+            console.error(`  ✓ ${c.component}：已满足（目标 ${c.desired}，当前 ${cur}）`)
+            continue
+        }
+        const mark = c.ok ? '↻' : '✗'
+        console.error(`  ${mark} ${c.component}：目标 ${c.desired}，当前 ${cur}`)
+        const steps = r.dryRun ? c.planned : c.executed
+        for (const s of steps) {
+            const tag = r.dryRun ? '·' : 'ok' in s && (s as { ok: boolean }).ok ? '✓' : '✗'
+            console.error(`    ${tag} ${s.description}`)
+        }
+    }
 }
 
 /** 把守护式编辑结果渲染为人类摘要（走 stderr）。 */
@@ -445,6 +466,32 @@ addConnectionOptions(program.command('service'))
                     yes: Boolean(options.yes),
                 }),
             renderService,
+            4
+        )
+    })
+
+// provision（环境初始化）：按 stack 声明把服务器收敛到目标栈（写操作，需 --dry-run 预演或 --yes 执行）
+addConnectionOptions(program.command('provision'))
+    .description('环境初始化：按配置文件 stack 声明收敛服务器（node/jdk/python/docker；--dry-run 预演 / --yes 执行）')
+    .argument('[components...]', '只处理指定组件（默认处理 stack 中全部）')
+    .option('--dry-run', '预演：检测当前状态并打印将执行的步骤，但不落地')
+    .option('--yes', '确认执行写操作（安装/收敛步骤）')
+    .option('--no-audit', '禁用本地审计日志')
+    .option('--audit-log <path>', '审计日志文件路径，默认 ~/.wink-sftp/audit.log')
+    .action(async (components: string[], options: Record<string, unknown>) => {
+        await execute(
+            Boolean(options.json),
+            () =>
+                provision(
+                    {
+                        ...buildBase(options),
+                        dryRun: Boolean(options.dryRun),
+                        audit: options.audit as boolean | undefined,
+                        auditLog: options.auditLog as string | undefined,
+                    },
+                    { yes: Boolean(options.yes), only: components }
+                ),
+            renderProvision,
             4
         )
     })

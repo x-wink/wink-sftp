@@ -62,7 +62,9 @@ export const startTestServer = (): Promise<TestServer> =>
                     const session = acceptSession()
                     session.on('exec', (acceptExec, _reject, info) => {
                         const stream = acceptExec()
-                        const cp = spawn('/bin/sh', ['-c', info.command])
+                        // 默认 /bin/sh（CI/Linux）；WINK_E2E_SHELL 可指向其它 POSIX sh，便于在
+                        // 无 /bin/sh 的平台（如 Windows 下 Git Bash 的 sh.exe）本地验证。
+                        const cp = spawn(process.env.WINK_E2E_SHELL || '/bin/sh', ['-c', info.command])
                         cp.stdout.on('data', (d) => stream.write(d))
                         cp.stderr.on('data', (d) => stream.stderr.write(d))
                         cp.on('close', (code) => {
