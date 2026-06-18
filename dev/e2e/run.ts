@@ -4,8 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { utils } from 'ssh2'
-import { startTestServer } from './server'
+import { startTestServer, generateTestKey } from './server'
 
 const repoRoot = process.cwd()
 const tsxBin = path.resolve(repoRoot, 'node_modules/.bin/tsx')
@@ -64,7 +63,7 @@ const main = async (): Promise<void> => {
     fs.writeFileSync(path.join(dist, '.winksftpignore'), '*.log\nsecret/\n')
 
     const keyPath = path.join(tmp, 'id_e2e')
-    fs.writeFileSync(keyPath, utils.generateKeyPairSync('ed25519').private, { mode: 0o600 })
+    fs.writeFileSync(keyPath, generateTestKey(), { mode: 0o600 })
 
     const conn = (auth: string[]) => ['-h', '127.0.0.1', '-p', port, '-u', 'tester', ...auth]
     const pw = ['--connect-password', 'pw']
@@ -143,6 +142,48 @@ const main = async (): Promise<void> => {
         check('注入 secret + 选中 prod 环境', r.json.ok === true && r.json.remote === prodRemote, r.json)
         r = await runCliEnv(['-c', cfg, '--env', 'prod', '--dry-run', '--json'], {})
         check('缺 ${WINK_E2E_PW} → 退出码 2', r.code === 2 && r.json.kind === 'config', { code: r.code, json: r.json })
+
+        console.log('9) 文件级备份：部署前快照已存在的远程目标')
+        // remote 已含 index.html（用例 2 落地），开启 --sftp-backup 再部署一次 → 生成快照
+        r = await runCli(['-l', dist, '-r', remote, '--sftp-backup', '-o', '--json', ...conn(pw)])
+        const backupPath = r.json.backup as string | null
+        check(
+            'backup 路径返回且快照目录已生成',
+            r.json.ok === true &&
+                typeof backupPath === 'string' &&
+                backupPath.includes('.wink-bak.') &&
+                fs.existsSync(backupPath),
+            r.json
+        )
+
+        console.log('10) 多机部署：一台正常 + 一台连接失败（continue 汇总）')
+        const cfgMulti = path.join(tmp, 'multi.json')
+        fs.writeFileSync(
+            cfgMulti,
+            JSON.stringify({
+                connect: { username: 'tester', password: 'pw' },
+                local: dist,
+                remote,
+                sftpOptions: { override: true },
+                // 第一台用真实测试端口；第二台指向已关闭端口 1 → 连接失败
+                hosts: [
+                    { host: '127.0.0.1', port: Number(port) },
+                    { host: '127.0.0.1', port: 1 },
+                ],
+            })
+        )
+        r = await runCli(['-c', cfgMulti, '--json'])
+        const hosts = r.json.hosts as { ok: boolean; error?: { kind: string } }[] | undefined
+        check(
+            'ok=false、两台聚合、首台成功次台连接失败',
+            r.json.ok === false &&
+                Array.isArray(hosts) &&
+                hosts.length === 2 &&
+                hosts[0].ok === true &&
+                hosts[1].ok === false &&
+                hosts[1].error?.kind === 'connection',
+            r.json
+        )
     } finally {
         await server.close()
         fs.rmSync(tmp, { recursive: true, force: true })

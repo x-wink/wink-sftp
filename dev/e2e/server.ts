@@ -5,8 +5,23 @@ import { Server, utils } from 'ssh2'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { generateKeyPairSync } from 'node:crypto'
 
 const { STATUS_CODE, flagsToString } = utils.sftp
+
+/**
+ * 生成一把测试用 RSA 私钥（PEM/PKCS8）。
+ * 用 node:crypto 而非 ssh2 的 `utils.generateKeyPairSync('ed25519')`——后者偶发产出
+ * ssh2 自身无法解析的 OpenSSH 私钥（`Malformed OpenSSH private key`），会让 e2e 随机失败。
+ * RSA PEM 被 ssh2 服务端 hostKey 与客户端 privateKey 稳定接受。仅测试用。
+ */
+export const generateTestKey = (): string =>
+    generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        // ssh2 接受 PKCS1 PEM（`BEGIN RSA PRIVATE KEY`），不接受 PKCS8（`BEGIN PRIVATE KEY`）
+        privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+        publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+    }).privateKey
 
 interface FileHandle {
     type: 'file'
@@ -35,7 +50,7 @@ export interface TestServer {
 /** 起一个一次性测试 SSH 服务端，resolve 出监听端口与关闭函数。 */
 export const startTestServer = (): Promise<TestServer> =>
     new Promise((resolve) => {
-        const hostKey = utils.generateKeyPairSync('ed25519').private
+        const hostKey = generateTestKey()
         const server = new Server({ hostKeys: [hostKey] }, (client) => {
             client.on('authentication', (ctx) => {
                 // 拒绝 none，逼客户端走它配置的 password / publickey，从而真实验证两条认证路径
