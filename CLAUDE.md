@@ -78,7 +78,7 @@ pnpm run release    # build + changelogen --release --push（改版本/CHANGELOG
 
 ## Conventions
 
-- **Lint**：oxlint（`.oxlintrc.json`，correctness=error；启用 `consistent-type-imports`——type 必须 `import type`）。**Format**：oxfmt（`.oxfmtrc.json`）：4 空格、单引号、无分号、行宽 120。
+- **Lint**：oxlint（`.oxlintrc.json`，correctness=error；启用 `consistent-type-imports`——type 必须 `import type`）。**Format**：oxfmt（`.oxfmtrc.json`）：4 空格、单引号、无分号、行宽 120。**oxfmt 不止格式化代码，也校验 Markdown**（`format:check` 会扫 `.md`，如表格列对齐）——改文档后照样要过 `pnpm run format`。
 - TypeScript 6 strict，`moduleResolution: bundler`。包管理器 pnpm。
-- 无 husky/lint-staged；提交信息由 CI 的 `commitlint` job 校验。遵循 Conventional Commits，CHANGELOG 由 changelogen 生成。提交信息、CLI 文案与文档均用中文。
+- 无 husky/lint-staged；提交信息由 CI 的 `commitlint` job 校验。遵循 Conventional Commits，**type 用标准常用集**（`.commitlintrc` 的 `type-enum`：`build/chore/ci/docs/feat/fix/perf/refactor/revert/style/test`，即 `@commitlint/config-conventional` 默认；放宽了中文 subject 与 header 长度）。CHANGELOG 由 changelogen 生成。提交信息、CLI 文案与文档均用中文。
 - **CI**（`.github/workflows/ci.yml`）：lint/format/typecheck/test/build 跑 Node 22/24（pnpm 11 需 22+）+ Node 18 运行时下限冒烟 + commitlint。**发布**（`release.yml`）：推送 `v*` tag 触发，`npm publish` 经 **OIDC 可信发布**（无 token，自动生成 provenance；需先在 npmjs.com 为本包配置 GitHub Actions 可信发布者，仓库须公开）。
