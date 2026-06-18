@@ -3,8 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Command } from 'commander'
 import { name, version, description } from '../package.json'
-import type { RunOption, SftpOption, DeployResult, PullResult, LsResult } from './core'
-import { run, pull, ls } from './core'
+import type { RunOption, SftpOption, DeployResult, MultiDeployResult, PullResult, LsResult } from './core'
+import { runAuto, pull, ls } from './core'
 import { ConfigError, exitCodeOf, WinkSftpError } from './errors'
 
 const program = new Command()
@@ -101,6 +101,28 @@ const renderDeploy = (r: DeployResult): void => {
     else if (r.backup) console.error(`  ⛁ 已保留备份：${r.backup}`)
 }
 
+/** 多机部署结果摘要（走 stderr）。 */
+const renderMulti = (r: MultiDeployResult): void => {
+    const okCount = r.hosts.filter((h) => h.ok).length
+    console.error(`多机部署：${okCount}/${r.hosts.length} 成功`)
+    for (const h of r.hosts) {
+        if (h.ok && h.result) {
+            const d = h.result
+            console.error(
+                `  ✓ ${h.host}：传输 ${d.transferred.length} / 跳过 ${d.skipped.length} / 失败 ${d.failed.length}`
+            )
+        } else {
+            console.error(`  ✗ ${h.host}：${h.error?.message ?? '部署失败'}`)
+        }
+    }
+}
+
+/** 部署结果统一渲染：多机（含 hosts）走 {@link renderMulti}，单机走 {@link renderDeploy}。 */
+const renderDeployOrMulti = (r: DeployResult | MultiDeployResult): void => {
+    if ('hosts' in r) renderMulti(r)
+    else renderDeploy(r)
+}
+
 /** 把下载结果渲染为人类摘要（走 stderr）。 */
 const renderPull = (r: PullResult): void => {
     console.error('下载完成：')
@@ -141,6 +163,9 @@ addConnectionOptions(program.command('deploy', { isDefault: true }))
     .option('--sftp-retries <n>', '单文件传输失败的额外重试次数，默认为2')
     .option('--before-run-command <command>', '传输开始前要执行的命令，别瞎写！')
     .option('--after-run-command <command>', '传输完成后要执行的命令，别瞎写！')
+    .option('--hosts <list>', '多机部署：逗号分隔的主机地址，各自合并到连接配置之上（端口/用户/凭据共用）')
+    .option('--fail-fast', '多机：首台失败即停止（默认跑完所有主机再汇总）')
+    .option('--host-concurrency <n>', '多机：同时部署的主机数上限，默认为5')
     .action(async (options: Record<string, unknown>) => {
         // 配置构造（含可能抛错的私钥读取）放进 execute 回调，统一由其 try/catch 兜底
         await execute(
@@ -149,6 +174,12 @@ addConnectionOptions(program.command('deploy', { isDefault: true }))
                 const mode = options.sftpMode !== undefined ? parseInt(String(options.sftpMode), 8) : undefined
                 const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
                 const retries = options.sftpRetries !== undefined ? Number(options.sftpRetries) : undefined
+                const hosts = (options.hosts as string | undefined)
+                    ?.split(',')
+                    .map((h) => ({ host: h.trim() }))
+                    .filter((h) => h.host)
+                const hostConcurrency =
+                    options.hostConcurrency !== undefined ? Number(options.hostConcurrency) : undefined
                 const config: RunOption = {
                     ...buildBase(options),
                     local: options.local as string | undefined,
@@ -156,6 +187,9 @@ addConnectionOptions(program.command('deploy', { isDefault: true }))
                     dryRun: Boolean(options.dryRun),
                     audit: options.audit as boolean | undefined,
                     auditLog: options.auditLog as string | undefined,
+                    hosts: hosts?.length ? hosts : undefined,
+                    failFast: options.failFast as boolean | undefined,
+                    hostConcurrency,
                     sftpOptions: {
                         excludes: (options.sftpExcludes as string | undefined)?.split(','),
                         ignore: (options.sftpIgnore as string | undefined)?.split(','),
@@ -173,9 +207,9 @@ addConnectionOptions(program.command('deploy', { isDefault: true }))
                         afterRunCommand: options.afterRunCommand,
                     } as SftpOption,
                 }
-                return run(config)
+                return runAuto(config)
             },
-            renderDeploy
+            renderDeployOrMulti
         )
     })
 

@@ -62,6 +62,10 @@ export const configSchema = z.object({
     env: z.string().optional(),
     // 多环境：environments.<name> 为覆盖项，--env <name> 选中后深合并到基础配置之上
     environments: z.record(z.string(), z.object(baseShape)).optional(),
+    // 多机部署：每台主机的连接覆盖（叠加到基础 connect 之上）+ 失败策略 + 主机并发
+    hosts: z.array(connectSchema).optional(),
+    failFast: z.boolean().optional(),
+    hostConcurrency: z.coerce.number().optional(),
 })
 
 /** 把 zod 校验问题列表压成一行可读信息（`字段路径: 原因`）。 */

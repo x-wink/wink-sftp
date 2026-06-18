@@ -7,12 +7,12 @@ import { shellQuote } from './exec'
 import { mapPool, DEFAULT_CONCURRENCY } from './pool'
 import { withRetry, DEFAULT_RETRIES } from './retry'
 import { appendAudit } from './audit'
-import { resolveConfig } from './config'
+import { resolveConfig, loadConfigFile } from './config'
 import { Logger } from './logger'
 import { withSession } from './session'
 import type { SshSession } from './session'
 import { backupRemote, restoreRemote } from './guard'
-import { ConfigError, TransferError } from './errors'
+import { ConfigError, TransferError, WinkSftpError } from './errors'
 
 export interface SftpOption {
     excludes?: string[]
@@ -58,6 +58,12 @@ export interface RunOption {
     env?: string
     /** 多环境覆盖表：环境名 → 覆盖配置（深合并到基础配置之上）。 */
     environments?: Record<string, EnvOverride>
+    /** 多机部署：每台主机的连接覆盖（深合并到基础 `connect` 之上，至少含 `host`）；非空则走多机编排。 */
+    hosts?: ConnectConfig[]
+    /** 多机失败策略：true=fail-fast（首台失败即停）；false=continue（默认，跑完所有主机再汇总）。 */
+    failFast?: boolean
+    /** 多机并发上限（同时部署的主机数，默认 {@link DEFAULT_CONCURRENCY}）。 */
+    hostConcurrency?: number
 }
 
 /** 多环境覆盖：环境名下可覆盖的配置子集（不含 `env`/`environments`/`config` 等调用级字段）。 */
@@ -395,6 +401,80 @@ export const run = async (options?: RunOption): Promise<DeployResult> => {
         throw e
     }
 }
+
+/** 单台主机的部署结果（连接/配置错误捕获为 `error`，不抛）。 */
+export interface HostDeployResult {
+    /** 主机地址。 */
+    host: string
+    /** 该主机是否成功（连接、配置、全部文件传输均成功）。 */
+    ok: boolean
+    /** 成功或部分失败时的部署结果。 */
+    result?: DeployResult
+    /** 连接/配置等致命错误（kind 来自类型化错误）。 */
+    error?: { kind: string; message: string }
+}
+
+/** 多机部署聚合结果。 */
+export interface MultiDeployResult {
+    /** 是否所有主机都成功。 */
+    ok: boolean
+    /** 各主机结果（continue 模式含全部；fail-fast 模式止于首个失败主机）。 */
+    hosts: HostDeployResult[]
+}
+
+/** 汇总多机主机列表：优先用 `options.hosts`，否则取配置文件的 `hosts`，均无则空。 */
+const collectHosts = (options?: RunOption): ConnectConfig[] => {
+    if (options?.hosts?.length) return options.hosts
+    if (options?.config) {
+        const file = loadConfigFile(options.config)
+        if (file.hosts?.length) return file.hosts
+    }
+    return []
+}
+
+/** 对单台主机执行一次部署，把连接/配置等致命错误捕获为结构化结果（不抛），便于聚合。 */
+const deployHost = async (options: RunOption | undefined, hc: ConnectConfig): Promise<HostDeployResult> => {
+    const host = hc.host ?? options?.connect?.host ?? '?'
+    // 每台主机独立连接：把该主机的连接覆盖叠加到基础 connect 之上；清掉 hosts 避免递归
+    const perHost: RunOption = { ...options, hosts: undefined, connect: { ...options?.connect, ...hc } }
+    try {
+        const result = await run(perHost)
+        return { host, ok: result.ok, result }
+    } catch (e) {
+        const kind = e instanceof WinkSftpError ? e.kind : 'error'
+        return { host, ok: false, error: { kind, message: e instanceof Error ? e.message : String(e) } }
+    }
+}
+
+/**
+ * 多机并行部署：对每台 `hosts` 执行部署并聚合。每台一个独立会话（连接互不影响）。
+ *
+ * 失败策略：默认 **continue**（受限并发跑完所有主机再汇总）；`failFast=true` 时**顺序**执行、
+ * 首台失败即停并跳过其余。连接/配置错误被收进对应主机的 `error`，不影响其它主机。
+ */
+export const runMany = async (options?: RunOption): Promise<MultiDeployResult> => {
+    const hosts = collectHosts(options)
+    if (!hosts.length) throw new ConfigError('多机部署需要至少一台主机（options.hosts 或配置文件 hosts）')
+    const failFast = options?.failFast ?? false
+    const hostConcurrency = options?.hostConcurrency ?? DEFAULT_CONCURRENCY
+    const results: HostDeployResult[] = []
+    if (failFast) {
+        for (const hc of hosts) {
+            // 顺序执行以实现「首台失败即停」
+            // eslint-disable-next-line no-await-in-loop
+            const r = await deployHost(options, hc)
+            results.push(r)
+            if (!r.ok) break
+        }
+    } else {
+        results.push(...(await mapPool(hosts, hostConcurrency, (hc) => deployHost(options, hc))))
+    }
+    return { ok: results.length === hosts.length && results.every((r) => r.ok), hosts: results }
+}
+
+/** 自动分派：配置了多机 `hosts` 走 {@link runMany}，否则走单机 {@link run}。CLI 部署入口。 */
+export const runAuto = (options?: RunOption): Promise<DeployResult | MultiDeployResult> =>
+    collectHosts(options).length ? runMany(options) : run(options)
 
 /** 把远程 `Stats` 归类为 {@link RemoteEntry} 的 type。 */
 const classify = (attrs: Stats): RemoteEntry['type'] =>
