@@ -71,6 +71,13 @@ describe('rollback（手动回滚）', () => {
         expect(h.state.execs).toContain(`rm -rf '/srv/app' && mv '/srv/app.wink-bak.300' '/srv/app'`)
     })
 
+    it('按数值而非字符串取最新：位数不同的时间戳也正确（100 > 90）', async () => {
+        h.state.entries = ['app', 'app.wink-bak.90', 'app.wink-bak.100']
+        const r = await rollback({ connect: conn, remote: '/srv/app' })
+        // 字符串降序会误选 '90'（'9' > '1'）；数值降序应选 100
+        expect(r.backup).toBe('/srv/app.wink-bak.100')
+    })
+
     it('无快照：ok=false、backup=null、不执行恢复命令', async () => {
         h.state.entries = ['app', 'unrelated']
         const r = await rollback({ connect: conn, remote: '/srv/app' })

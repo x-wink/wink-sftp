@@ -187,10 +187,15 @@ addConnectionOptions(program.command('deploy', { isDefault: true }))
             const mode = options.sftpMode !== undefined ? parseInt(String(options.sftpMode), 8) : undefined
             const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
             const retries = options.sftpRetries !== undefined ? Number(options.sftpRetries) : undefined
-            const hosts = (options.hosts as string | undefined)
+            const hostsArg = options.hosts as string | undefined
+            const hosts = hostsArg
                 ?.split(',')
                 .map((h) => ({ host: h.trim() }))
                 .filter((h) => h.host)
+            // 提供了 --hosts 却解析不出任何有效主机（如 ",," / 纯空白）：明确报错，而非静默退化为单机
+            if (hostsArg !== undefined && !hosts?.length) {
+                throw new ConfigError(`--hosts 未解析出有效主机地址：${JSON.stringify(hostsArg)}`)
+            }
             const hostConcurrency = options.hostConcurrency !== undefined ? Number(options.hostConcurrency) : undefined
             return {
                 ...buildBase(options),

@@ -198,6 +198,10 @@ const main = async (): Promise<void> => {
                 !fs.existsSync(path.join(remote, 'stray.txt')),
             r.json
         )
+
+        console.log('12) 畸形 --hosts（解析不出主机）→ 退出码 2 / kind=config')
+        r = await runCli(['-l', dist, '-r', remote, '--hosts', ',,', '--json', ...conn(pw)])
+        check('exit=2 && kind=config', r.code === 2 && r.json.kind === 'config', { code: r.code, json: r.json })
     } finally {
         await server.close()
         fs.rmSync(tmp, { recursive: true, force: true })

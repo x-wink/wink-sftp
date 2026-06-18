@@ -83,6 +83,24 @@ describe('runMany（多机部署）', () => {
     it('无主机：抛配置错误', async () => {
         await expect(runMany(base([]))).rejects.toThrow(/至少一台主机/)
     })
+
+    it('failFast 可来自配置文件（不止 CLI/options）', async () => {
+        const cfg = path.join(localDir, 'multi.json')
+        fs.writeFileSync(
+            cfg,
+            JSON.stringify({
+                connect: { port: 22, username: 'u', password: 'pw' },
+                local: localDir,
+                remote: '/remote',
+                audit: false,
+                sftpOptions: { override: true },
+                hosts: [{ host: 'h1' }, { host: 'bad' }, { host: 'h3' }],
+                failFast: true,
+            })
+        )
+        const r = await runMany({ config: cfg })
+        expect(r.hosts.map((h) => h.host)).toEqual(['h1', 'bad']) // 文件里的 failFast 生效，h3 未尝试
+    })
 })
 
 describe('runAuto（自动分派）', () => {
@@ -101,5 +119,23 @@ describe('runAuto（自动分派）', () => {
         })
         expect('hosts' in r).toBe(false)
         expect((r as { transferred: string[] }).transferred).toHaveLength(1)
+    })
+
+    it('环境覆盖里的 hosts 经 --env 生效（走多机）', async () => {
+        const cfg = path.join(localDir, 'env.json')
+        fs.writeFileSync(
+            cfg,
+            JSON.stringify({
+                connect: { port: 22, username: 'u', password: 'pw' },
+                local: localDir,
+                remote: '/remote',
+                audit: false,
+                sftpOptions: { override: true },
+                environments: { prod: { hosts: [{ host: 'h1' }, { host: 'h2' }] } },
+            })
+        )
+        const r = await runAuto({ config: cfg, env: 'prod' })
+        expect('hosts' in r).toBe(true)
+        expect((r as { hosts: { host: string }[] }).hosts.map((h) => h.host)).toEqual(['h1', 'h2'])
     })
 })

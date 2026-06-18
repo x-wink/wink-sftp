@@ -7,7 +7,7 @@ import { shellQuote } from './exec'
 import { mapPool, DEFAULT_CONCURRENCY } from './pool'
 import { withRetry, DEFAULT_RETRIES } from './retry'
 import { appendAudit } from './audit'
-import { resolveConfig, loadConfigFile } from './config'
+import { resolveConfig, mergeConfig } from './config'
 import { Logger } from './logger'
 import { withSession } from './session'
 import type { SshSession } from './session'
@@ -194,6 +194,30 @@ const makeProgress = (logger: Logger, total: number): ((status: string, target: 
     return (status, target) => logger.info(`[${++done}/${total}] ${status} ${target}`)
 }
 
+/** 仅保留 `keepPath` 这一最新快照，删除 `remote` 同级的其它 `${base}.wink-bak.*`，避免无限累积。清理失败不影响部署。 */
+const pruneOldBackups = async (
+    session: SshSession,
+    sftp: SFTPWrapper,
+    remote: string,
+    keepPath: string,
+    logger: Logger
+): Promise<void> => {
+    const parent = path.posix.dirname(remote)
+    const prefix = `${path.posix.basename(remote)}.wink-bak.`
+    const keepName = path.posix.basename(keepPath)
+    try {
+        const stale = (await readdir(sftp, parent)).filter((e) => e.name.startsWith(prefix) && e.name !== keepName)
+        for (const e of stale) {
+            // 顺序删除：旧备份通常很少；避免一次性打满 SSH 会话
+            // eslint-disable-next-line no-await-in-loop
+            await session.exec(`rm -rf ${shellQuote(linuxPath(parent, e.name))}`)
+            logger.debug('已清理旧备份：' + e.name)
+        }
+    } catch (e) {
+        logger.debug('清理旧备份失败（忽略）：' + (e instanceof Error ? e.message : String(e)))
+    }
+}
+
 /** 计算扫描结果与基础映射（dry-run 与实跑共用）。 */
 const computePlan = (config: ResolvedConfig) => {
     const local = resolveLocal(config.local)
@@ -242,7 +266,13 @@ const planDeploy = (config: ResolvedConfig): DeployResult => {
     }
 }
 
-/** 实跑部署：建目录、传文件、跑前后命令，返回结构化结果。 */
+/**
+ * 实跑部署：建目录、传文件、跑前后命令，返回结构化结果。
+ *
+ * 备份/回滚复用 {@link guard} 的底层原语（`backupRemote`/`restoreRemote`），但**不走 `guard()` 编排**：
+ * 部署是「收集每文件成败、有失败才回滚」的部分失败模型，而 `guard()` 是「应用抛错即原子回滚」的模型，
+ * 二者语义不同；硬套 `guard()` 会丢掉结构化的 `failed[]` 明细。故此处共享原语、自管编排。
+ */
 const deploy = async (session: SshSession, config: ResolvedConfig, logger: Logger): Promise<DeployResult> => {
     const sftp = await session.sftp()
     const opts = config.sftpOptions
@@ -262,10 +292,15 @@ const deploy = async (session: SshSession, config: ResolvedConfig, logger: Logge
     logger.debug('待传输文件数：' + targets.length)
     warnings.forEach((w) => logger.warn('⚠ ' + w))
 
-    // 文件级备份：在任何变更（clear / 传输）之前对已存在的远程目标快照，供失败回滚
+    // 文件级备份：在任何变更（clear / 传输）之前对已存在的远程目标快照，供失败回滚。
+    // 备份本身失败时**清晰中止**（此时尚未改动远程），而非冒出底层 RemoteCommandError。
     let backup: string | null = null
     if (opts.backup) {
-        backup = await backupRemote(session, remote)
+        try {
+            backup = await backupRemote(session, remote)
+        } catch (e) {
+            throw new TransferError(`部署前备份失败，已中止（远程未改动）：${remote}`, { cause: e })
+        }
         if (backup) logger.debug('已备份远程目标：' + backup)
     }
 
@@ -327,11 +362,23 @@ const deploy = async (session: SshSession, config: ResolvedConfig, logger: Logge
 
     // 传输失败且有备份：回滚到快照（文件级），让远程目标恢复到部署前状态。
     // 回滚在后置命令之前——失败时不应再执行 afterRunCommand（如重启已被回滚的服务）。
+    // 回滚本身失败时**不外抛**：计入 warnings、保留原始 failed[] 与退出码（传输失败 5），
+    // 避免把「部分文件失败」掩盖成「远程命令失败」并丢掉明细。
     let rolledBack = false
     if (failed.length > 0 && backup) {
         logger.warn(`⚠ 传输失败，回滚到备份：${remote}`)
-        await restoreRemote(session, remote, backup)
-        rolledBack = true
+        try {
+            await restoreRemote(session, remote, backup)
+            rolledBack = true
+        } catch (e) {
+            warnings.push(
+                `回滚失败，远程可能处于不一致状态（备份保留于 ${backup}）：${e instanceof Error ? e.message : String(e)}`
+            )
+            logger.warn('⚠ ' + warnings[warnings.length - 1])
+        }
+    } else if (backup && !rolledBack) {
+        // 成功（无失败）：仅保留最新快照，清理更旧的，避免无限累积占满磁盘
+        await pruneOldBackups(session, sftp, remote, backup, logger)
     }
 
     // 回滚后不再执行后置命令（避免对已回滚的目标做 reload/重启）；未回滚则维持原行为
@@ -422,21 +469,30 @@ export interface MultiDeployResult {
     hosts: HostDeployResult[]
 }
 
-/** 汇总多机主机列表：优先用 `options.hosts`，否则取配置文件的 `hosts`，均无则空。 */
-const collectHosts = (options?: RunOption): ConnectConfig[] => {
-    if (options?.hosts?.length) return options.hosts
-    if (options?.config) {
-        const file = loadConfigFile(options.config)
-        if (file.hosts?.length) return file.hosts
+/**
+ * 对单台主机执行一次部署，把连接/配置等致命错误捕获为结构化结果（不抛），便于聚合。
+ * `merged` 为已合并好的配置（含文件 + 环境）；用 `config:false` 让每台**不再重复解析配置文件**。
+ */
+const deployHost = async (
+    merged: RunOption,
+    options: RunOption | undefined,
+    hc: ConnectConfig
+): Promise<HostDeployResult> => {
+    const host = hc.host ?? merged.connect?.host ?? '?'
+    const perHost: RunOption = {
+        ...merged, // 文件+环境合并后的全部字段（含 audit/debug 等文件级调用开关）
+        config: false, // merged 已含文件/环境值，避免每台主机重复读取与解析配置文件
+        env: undefined,
+        environments: undefined,
+        hosts: undefined,
+        connect: { ...merged.connect, ...hc },
+        // CLI/编程式调用级开关优先于文件值
+        debug: options?.debug ?? merged.debug,
+        json: options?.json ?? merged.json,
+        dryRun: options?.dryRun ?? merged.dryRun,
+        audit: options?.audit ?? merged.audit,
+        auditLog: options?.auditLog ?? merged.auditLog,
     }
-    return []
-}
-
-/** 对单台主机执行一次部署，把连接/配置等致命错误捕获为结构化结果（不抛），便于聚合。 */
-const deployHost = async (options: RunOption | undefined, hc: ConnectConfig): Promise<HostDeployResult> => {
-    const host = hc.host ?? options?.connect?.host ?? '?'
-    // 每台主机独立连接：把该主机的连接覆盖叠加到基础 connect 之上；清掉 hosts 避免递归
-    const perHost: RunOption = { ...options, hosts: undefined, connect: { ...options?.connect, ...hc } }
     try {
         const result = await run(perHost)
         return { host, ok: result.ok, result }
@@ -446,35 +502,42 @@ const deployHost = async (options: RunOption | undefined, hc: ConnectConfig): Pr
     }
 }
 
-/**
- * 多机并行部署：对每台 `hosts` 执行部署并聚合。每台一个独立会话（连接互不影响）。
- *
- * 失败策略：默认 **continue**（受限并发跑完所有主机再汇总）；`failFast=true` 时**顺序**执行、
- * 首台失败即停并跳过其余。连接/配置错误被收进对应主机的 `error`，不影响其它主机。
- */
-export const runMany = async (options?: RunOption): Promise<MultiDeployResult> => {
-    const hosts = collectHosts(options)
-    if (!hosts.length) throw new ConfigError('多机部署需要至少一台主机（options.hosts 或配置文件 hosts）')
-    const failFast = options?.failFast ?? false
-    const hostConcurrency = options?.hostConcurrency ?? DEFAULT_CONCURRENCY
+/** 在已合并配置上执行多机编排（{@link runMany} 与 {@link runAuto} 共用，避免重复解析配置文件）。 */
+const runManyMerged = async (merged: RunOption, options?: RunOption): Promise<MultiDeployResult> => {
+    const hosts = merged.hosts ?? []
+    if (!hosts.length) throw new ConfigError('多机部署需要至少一台主机（hosts 为空）')
+    const failFast = merged.failFast ?? false
+    const hostConcurrency = merged.hostConcurrency ?? DEFAULT_CONCURRENCY
     const results: HostDeployResult[] = []
     if (failFast) {
         for (const hc of hosts) {
             // 顺序执行以实现「首台失败即停」
             // eslint-disable-next-line no-await-in-loop
-            const r = await deployHost(options, hc)
+            const r = await deployHost(merged, options, hc)
             results.push(r)
             if (!r.ok) break
         }
     } else {
-        results.push(...(await mapPool(hosts, hostConcurrency, (hc) => deployHost(options, hc))))
+        results.push(...(await mapPool(hosts, hostConcurrency, (hc) => deployHost(merged, options, hc))))
     }
     return { ok: results.length === hosts.length && results.every((r) => r.ok), hosts: results }
 }
 
-/** 自动分派：配置了多机 `hosts` 走 {@link runMany}，否则走单机 {@link run}。CLI 部署入口。 */
-export const runAuto = (options?: RunOption): Promise<DeployResult | MultiDeployResult> =>
-    collectHosts(options).length ? runMany(options) : run(options)
+/**
+ * 多机并行部署：对每台 `hosts`（来自文件 / 环境 / 显式参数，经 {@link mergeConfig} 合并）执行部署并聚合。
+ * 每台一个独立会话（连接互不影响）。
+ *
+ * 失败策略：默认 **continue**（受限并发跑完所有主机再汇总）；`failFast=true` 时**顺序**执行、
+ * 首台失败即停并跳过其余。`failFast`/`hostConcurrency` 同样支持在配置文件/环境中设置。
+ * 连接/配置错误被收进对应主机的 `error`，不影响其它主机。
+ */
+export const runMany = (options?: RunOption): Promise<MultiDeployResult> => runManyMerged(mergeConfig(options), options)
+
+/** 自动分派：合并后存在 `hosts` 走多机编排，否则走单机 {@link run}。CLI 部署入口（只解析一次配置）。 */
+export const runAuto = (options?: RunOption): Promise<DeployResult | MultiDeployResult> => {
+    const merged = mergeConfig(options)
+    return merged.hosts?.length ? runManyMerged(merged, options) : run(options)
+}
 
 /** 把远程 `Stats` 归类为 {@link RemoteEntry} 的 type。 */
 const classify = (attrs: Stats): RemoteEntry['type'] =>
@@ -496,7 +559,9 @@ const readdir = (sftp: SFTPWrapper, dir: string): Promise<RemoteEntry[]> =>
                         size: e.attrs.size,
                         mtime: e.attrs.mtime,
                     }))
-                    .toSorted((a, b) => a.name.localeCompare(b.name))
+                    // 用 sort 而非 toSorted：后者是 Node 20+，本包 engines 下限为 18；此数组是 map 新建的，排序不影响外部
+                    // eslint-disable-next-line unicorn/no-array-sort
+                    .sort((a, b) => a.name.localeCompare(b.name))
             )
         })
     })
@@ -631,7 +696,10 @@ export const rollback = async (options?: RunOption): Promise<RollbackResult> => 
         const backups = (await readdir(sftp, parent))
             .map((e) => e.name)
             .filter((name) => name.startsWith(prefix))
-            .toSorted((a, b) => b.localeCompare(a))
+            // 按时间戳后缀**数值**降序取最新（避免字符串比较在位数不同的时间戳上排错）；
+            // 用 sort 而非 toSorted（后者 Node 20+，engines 下限为 18）；此数组是 map/filter 新建的
+            // eslint-disable-next-line unicorn/no-array-sort
+            .sort((a, b) => Number(b.slice(prefix.length)) - Number(a.slice(prefix.length)))
         if (!backups.length) {
             logger.warn('⚠ 未找到可回滚的备份：' + remote)
             return { ok: false, remote, backup: null }

@@ -54,6 +54,11 @@ const baseShape = {
     dryRun: z.boolean().optional(),
     audit: z.boolean().optional(),
     auditLog: z.string().optional(),
+    // 多机部署：每台主机的连接覆盖（叠加到基础 connect 之上）+ 失败策略 + 主机并发。
+    // 放进 baseShape 使其既可在顶层、也可在 environments.<name> 下设置（随 --env 深合并）。
+    hosts: z.array(connectSchema).optional(),
+    failFast: z.boolean().optional(),
+    hostConcurrency: z.coerce.number().optional(),
 }
 
 export const configSchema = z.object({
@@ -62,10 +67,6 @@ export const configSchema = z.object({
     env: z.string().optional(),
     // 多环境：environments.<name> 为覆盖项，--env <name> 选中后深合并到基础配置之上
     environments: z.record(z.string(), z.object(baseShape)).optional(),
-    // 多机部署：每台主机的连接覆盖（叠加到基础 connect 之上）+ 失败策略 + 主机并发
-    hosts: z.array(connectSchema).optional(),
-    failFast: z.boolean().optional(),
-    hostConcurrency: z.coerce.number().optional(),
 })
 
 /** 把 zod 校验问题列表压成一行可读信息（`字段路径: 原因`）。 */
@@ -191,7 +192,16 @@ export interface ResolveOptions {
 }
 
 /** 参与「文件 ← 显式参数」深合并的配置字段（其余如 json/dryRun/audit 为调用级开关，单独处理）。 */
-const CONFIG_FIELDS = ['connect', 'local', 'remote', 'sftpOptions', 'environments'] as const
+const CONFIG_FIELDS = [
+    'connect',
+    'local',
+    'remote',
+    'sftpOptions',
+    'environments',
+    'hosts',
+    'failFast',
+    'hostConcurrency',
+] as const
 
 /** 仅挑出 options 中**已显式设置**的配置字段（undefined 不参与覆盖）。 */
 const pickConfigFields = (o: RunOption): Record<string, unknown> => {
@@ -217,6 +227,21 @@ const applyEnv = (base: RunOption, environments: Record<string, EnvOverride>, se
 }
 
 /**
+ * 合并配置（**不做必填校验**）：配置文件基底 → 叠加 `--env` 选中的环境覆盖 → 命令行/编程式**显式字段**
+ * 深合并覆盖其上（undefined 不覆盖）。`hosts`/`failFast`/`hostConcurrency` 与其它字段一样参与合并，
+ * 故文件与环境里设置的多机配置都能正确生效。单机校验与多机编排各自取所需字段。
+ */
+export const mergeConfig = (options: RunOption = {}): RunOption => {
+    const { config = false } = options
+    const fileCfg: RunOption = config ? loadConfigFile(config) : {}
+    // 环境表取文件与显式参数的并集（显式优先）；选中名 CLI/编程式 --env 优先于文件默认 env
+    const environments: Record<string, EnvOverride> = { ...fileCfg.environments, ...options.environments }
+    const selectedEnv = options.env ?? fileCfg.env
+    const base = applyEnv(fileCfg, environments, selectedEnv)
+    return deepMerge(base as Record<string, unknown>, pickConfigFields(options)) as RunOption
+}
+
+/**
  * 合并配置并校验，返回归一化配置。校验失败抛 {@link ConfigError}。
  *
  * **优先级（高→低）**：调用级开关（`--json`/`--dry-run`/`--debug`/`--env`/`--no-audit`/`--audit-log`）
@@ -228,18 +253,11 @@ export const resolveConfig = (
     options: RunOption = {},
     { requireLocal = true }: ResolveOptions = {}
 ): ResolvedConfig => {
-    const { config = false } = options
     // 调用级开关即便用 -c 配置文件也应生效（叠加在文件之上）。
     const cliDebug = options.debug ?? false
     const cliJson = options.json ?? false
     const cliDryRun = options.dryRun ?? false
-    const fileCfg: RunOption = config ? loadConfigFile(config) : {}
-    // 环境表取文件与显式参数的并集（显式优先）；选中名 CLI/编程式 --env 优先于文件默认 env
-    const environments: Record<string, EnvOverride> = { ...fileCfg.environments, ...options.environments }
-    const selectedEnv = options.env ?? fileCfg.env
-    // 文件基底 → 叠加选中环境覆盖 → 显式参数覆盖其上
-    const base = applyEnv(fileCfg, environments, selectedEnv)
-    const raw: RunOption = deepMerge(base as Record<string, unknown>, pickConfigFields(options)) as RunOption
+    const raw = mergeConfig(options)
     const connect = raw.connect ?? {}
     // 密码登录或密钥登录二选一：privateKey / agent 任一存在即可，允许密码留空
     const hasAuth = Boolean(connect.password) || Boolean(connect.privateKey) || Boolean(connect.agent)

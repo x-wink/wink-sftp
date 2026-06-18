@@ -18,6 +18,10 @@ const h = vi.hoisted(() => ({
         utimes: [] as { target: string; mtime: number }[],
         /** target → 还需失败的次数（Infinity 表示永久失败）。 */
         failRemaining: new Map<string, number>(),
+        /** exec 命令包含其中任一子串则以退出码 1 失败（模拟 cp/mv 失败）。 */
+        failExec: [] as string[],
+        /** 目录 → readdir 返回的文件名（用于备份清理）。 */
+        dirEntries: {} as Record<string, string[]>,
         ended: false,
     },
 }))
@@ -48,7 +52,8 @@ vi.mock('ssh2', () => {
             cb(null, stream)
             setTimeout(() => {
                 const m = command.match(/^stat '(.*)'$/)
-                const code = m ? (h.state.existing.has(m[1]) ? 0 : 1) : 0
+                let code = m ? (h.state.existing.has(m[1]) ? 0 : 1) : 0
+                if (h.state.failExec.some((sub) => command.includes(sub))) code = 1
                 stream.emit('exit', code)
             }, 0)
         }
@@ -75,6 +80,22 @@ vi.mock('ssh2', () => {
                     h.state.utimes.push({ target, mtime })
                     done()
                 },
+                readdir(dir: string, done: (err: unknown, list?: unknown) => void) {
+                    const names = h.state.dirEntries[dir] ?? []
+                    done(
+                        null,
+                        names.map((name) => ({
+                            filename: name,
+                            attrs: {
+                                size: 0,
+                                mtime: 0,
+                                isDirectory: () => false,
+                                isFile: () => true,
+                                isSymbolicLink: () => false,
+                            },
+                        }))
+                    )
+                },
             })
         }
     }
@@ -93,6 +114,8 @@ beforeEach(() => {
     h.state.statCalls = []
     h.state.utimes = []
     h.state.failRemaining = new Map()
+    h.state.failExec = []
+    h.state.dirEntries = {}
     h.state.ended = false
     localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wink-deploy-'))
     fs.writeFileSync(path.join(localDir, 'a.txt'), 'a')
@@ -221,6 +244,31 @@ describe('deploy（mock ssh2）', () => {
             true
         )
         expect(h.state.execs).not.toContain('systemctl restart app')
+    })
+
+    it('backup：回滚自身失败时计入 warnings、不外抛、保留传输失败结果', async () => {
+        h.state.failRemaining.set('/remote/a.txt', Infinity)
+        h.state.failExec = ['mv '] // 让 restoreRemote 的 mv 失败
+        const r = await baseRun({ override: true, backup: true })
+        expect(r.ok).toBe(false) // 仍是传输失败的结果，未被回滚错误掩盖
+        expect(r.rolledBack).toBe(false) // 回滚没成功
+        expect(r.failed.map((f) => f.target)).toEqual(['/remote/a.txt'])
+        expect(r.warnings.some((w) => w.includes('回滚失败'))).toBe(true)
+    })
+
+    it('backup：备份 cp 失败则清晰中止（TransferError），不触碰远程', async () => {
+        h.state.failExec = ['cp -a']
+        await expect(baseRun({ override: true, backup: true })).rejects.toThrow(/部署前备份失败/)
+        expect(h.state.fastPuts).toEqual([]) // 未传输任何文件
+    })
+
+    it('backup：成功后仅保留最新快照，清理更旧的快照', async () => {
+        h.state.dirEntries = { '/': ['remote', 'remote.wink-bak.100', 'remote.wink-bak.200', 'keep-me'] }
+        const r = await baseRun({ override: true, backup: true })
+        expect(r.ok).toBe(true)
+        expect(h.state.execs).toContain(`rm -rf '/remote.wink-bak.100'`)
+        expect(h.state.execs).toContain(`rm -rf '/remote.wink-bak.200'`)
+        expect(h.state.execs.some((c) => c.includes('keep-me'))).toBe(false) // 非快照不动
     })
 
     it('实跑写入审计日志', async () => {
