@@ -3,8 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Command } from 'commander'
 import { name, version, description } from '../package.json'
-import type { RunOption, SftpOption, DeployResult } from './core'
-import { run } from './core'
+import type { RunOption, SftpOption, DeployResult, PullResult, LsResult } from './core'
+import { run, pull, ls } from './core'
 import { ConfigError, exitCodeOf, WinkSftpError } from './errors'
 
 const program = new Command()
@@ -12,8 +12,82 @@ program.name(name).version(version).description(description)
 // 释放 -h 给 connect-host（沿用本工具历史用法），help 仅保留 --help
 program.helpOption('--help', '显示帮助信息')
 
+/** 给命令挂上连接与调用级公共选项（部署 / 下载 / 浏览共用）。 */
+const addConnectionOptions = (cmd: Command): Command =>
+    cmd
+        .helpOption('--help', '显示帮助信息')
+        .option(
+            '-c --config <path>',
+            '指定配置文件路径（相对启动目录，支持 .json/.yaml/.yml），会整体覆盖命令行连接/路径参数'
+        )
+        .option('-h --connect-host <host>', '远程服务器地址')
+        .option('-p --connect-port <port>', '远程服务器端口')
+        .option('-u --connect-username <user>', '远程服务器用户名')
+        .option('--connect-password <pwd>', '远程服务器密码（与私钥二选一）')
+        .option('--connect-private-key <path>', '私钥文件路径（相对启动目录），用于密钥登录')
+        .option('--connect-passphrase <pass>', '私钥口令（加密私钥时需要）')
+        .option('--env <name>', '选择多环境配置中的某个环境（对应配置文件 environments 下的键）')
+        .option('--debug', '输出调试日志，默认false')
+        .option('--json', '以 JSON 结构化结果输出到 stdout（人类日志走 stderr），便于脚本/agent 解析')
+
+/** 私钥以文件路径传入（相对启动目录），读为内容交给 ssh2；读失败抛 ConfigError。 */
+const readPrivateKey = (p: unknown): string | undefined => {
+    if (p === undefined) return undefined
+    const keyPath = path.resolve(process.cwd(), String(p))
+    try {
+        return String(fs.readFileSync(keyPath))
+    } catch (e) {
+        throw new ConfigError(`读取私钥文件失败：${keyPath}`, { cause: e })
+    }
+}
+
+/** 从扁平 CLI 选项构造连接配置与公共调用级开关。 */
+const buildBase = (o: Record<string, unknown>): RunOption => ({
+    config: o.config as string | undefined,
+    debug: o.debug as boolean | undefined,
+    json: Boolean(o.json),
+    env: o.env as string | undefined,
+    connect: {
+        host: o.connectHost as string | undefined,
+        port: o.connectPort !== undefined ? Number(o.connectPort) : undefined,
+        username: o.connectUsername as string | undefined,
+        password: o.connectPassword as string | undefined,
+        privateKey: readPrivateKey(o.connectPrivateKey),
+        passphrase: o.connectPassphrase as string | undefined,
+    },
+})
+
+/** 统一执行：渲染结果（人类或 --json）并据 `ok` 设置退出码；异常走 {@link handleError}。 */
+const execute = async <T extends { ok: boolean }>(
+    json: boolean,
+    fn: () => Promise<T>,
+    render: (r: T) => void,
+    failExit = 5
+): Promise<void> => {
+    try {
+        const result = await fn()
+        if (json) process.stdout.write(JSON.stringify(result) + '\n')
+        else render(result)
+        if (!result.ok) process.exitCode = failExit
+    } catch (e) {
+        handleError(e, json)
+    }
+}
+
+/** 统一错误出口：--json 输出 `{ok:false,kind,error}`，否则人类信息；按错误类型定退出码。 */
+const handleError = (e: unknown, json: boolean): void => {
+    const kind = e instanceof WinkSftpError ? e.kind : 'error'
+    const message = e instanceof Error ? e.message : String(e)
+    if (json) {
+        process.stdout.write(JSON.stringify({ ok: false, kind, error: message }) + '\n')
+    } else {
+        console.error('执行失败：', message)
+    }
+    process.exitCode = exitCodeOf(e)
+}
+
 /** 把结构化部署结果渲染为人类可读摘要（走 stderr）。 */
-const renderHuman = (r: DeployResult): void => {
+const renderDeploy = (r: DeployResult): void => {
     console.error(r.dryRun ? '【预演】以下动作将执行但不会落地：' : '部署完成：')
     if (r.commands.length) {
         console.error(`  远程命令（${r.commands.length}）：`)
@@ -25,26 +99,32 @@ const renderHuman = (r: DeployResult): void => {
     r.failed.forEach((f) => console.error(`    ✗ ${f.target}：${f.error}`))
 }
 
-program
-    .option(
-        '-c --config <path>',
-        '指定配置文件路径，相对于本命令启动入口文件目录，一般是在package.json中启动，会覆盖命令行参数'
-    )
+/** 把下载结果渲染为人类摘要（走 stderr）。 */
+const renderPull = (r: PullResult): void => {
+    console.error('下载完成：')
+    if (r.dirs.length) console.error(`  本地目录（${r.dirs.length}）`)
+    console.error(`  下载 ${r.downloaded.length} / 失败 ${r.failed.length}`)
+    r.failed.forEach((f) => console.error(`    ✗ ${f.target}：${f.error}`))
+}
+
+/** 把远程目录列表渲染为人类摘要（走 stderr）。 */
+const renderLs = (r: LsResult): void => {
+    console.error(`远程目录 ${r.remote}（${r.entries.length} 项）：`)
+    for (const e of r.entries) {
+        const tag = e.type === 'dir' ? 'd' : e.type === 'link' ? 'l' : '-'
+        console.error(`  ${tag} ${String(e.size).padStart(10)}  ${e.name}`)
+    }
+}
+
+// deploy（默认命令，无子命令时执行；保持向后兼容）
+addConnectionOptions(program)
     .option('-l --local <local>', '本地路径')
     .option('-r --remote <remote>', '远程路径')
-    .option('-h --connect-host <host>', '远程服务器地址，必填')
-    .option('-p --connect-port <port>', '远程服务器端口，必填')
-    .option('-u --connect-username <user>', '远程服务器用户名，必填')
-    .option('--connect-password <pwd>', '远程服务器密码（与私钥二选一）')
-    .option('--connect-private-key <path>', '私钥文件路径（相对启动目录），用于密钥登录')
-    .option('--connect-passphrase <pass>', '私钥口令（加密私钥时需要）')
-    .option('--debug', '输出调试日志，默认false')
-    .option('--json', '以 JSON 结构化结果输出到 stdout（人类日志走 stderr），便于脚本/agent 解析')
     .option('--dry-run', '预演：打印将执行的动作但不建立连接、不落地')
     .option('--no-audit', '禁用本地审计日志')
     .option('--audit-log <path>', '审计日志文件路径，默认 ~/.wink-sftp/audit.log')
-    .option('--env <name>', '选择多环境配置中的某个环境（对应配置文件 environments 下的键）')
     .option('-e --sftp-excludes <paths>', '要排除的本地目录，暂时只支持全字匹配，多个目录用英文逗号分隔，默认为空')
+    .option('--sftp-ignore <patterns>', 'gitignore 风格忽略规则，多个用英文逗号分隔（与 .winksftpignore 合并）')
     .option('-f --sftp-flat', '是否扁平化目录（本地文件夹下任意深度的文件都直接传输到远程文件夹下），默认为false')
     .option('--sftp-clear', '是否在传输开始前清空远程文件夹，默认为false。慎用！删错了你别怪我！')
     .option('-o --sftp-override', '是否覆盖远程文件夹中已存在的文件，默认为false')
@@ -58,40 +138,19 @@ program
     .action(async (options: Record<string, unknown>) => {
         const json = Boolean(options.json)
         try {
-            const port = options.connectPort !== undefined ? Number(options.connectPort) : undefined
-            // 私钥以文件路径传入（相对启动目录），此处读为内容交给 ssh2
-            let privateKey: string | undefined
-            if (options.connectPrivateKey !== undefined) {
-                const keyPath = path.resolve(process.cwd(), String(options.connectPrivateKey))
-                try {
-                    privateKey = String(fs.readFileSync(keyPath))
-                } catch (e) {
-                    throw new ConfigError(`读取私钥文件失败：${keyPath}`, { cause: e })
-                }
-            }
             const mode = options.sftpMode !== undefined ? parseInt(String(options.sftpMode), 8) : undefined
             const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
             const retries = options.sftpRetries !== undefined ? Number(options.sftpRetries) : undefined
-            const config = {
-                local: options.local,
-                remote: options.remote,
-                config: options.config,
-                debug: options.debug,
-                json,
+            const config: RunOption = {
+                ...buildBase(options),
+                local: options.local as string | undefined,
+                remote: options.remote as string | undefined,
                 dryRun: Boolean(options.dryRun),
                 audit: options.audit as boolean | undefined,
                 auditLog: options.auditLog as string | undefined,
-                env: options.env as string | undefined,
-                connect: {
-                    host: options.connectHost,
-                    port,
-                    username: options.connectUsername,
-                    password: options.connectPassword,
-                    privateKey,
-                    passphrase: options.connectPassphrase,
-                },
                 sftpOptions: {
                     excludes: (options.sftpExcludes as string | undefined)?.split(','),
+                    ignore: (options.sftpIgnore as string | undefined)?.split(','),
                     flat: options.sftpFlat,
                     clear: options.sftpClear,
                     override: options.sftpOverride,
@@ -104,24 +163,52 @@ program
                     beforeRunCommand: options.beforeRunCommand,
                     afterRunCommand: options.afterRunCommand,
                 } as SftpOption,
-            } as RunOption
-
-            const result = await run(config)
-            if (json) {
-                process.stdout.write(JSON.stringify(result) + '\n')
-            } else {
-                renderHuman(result)
             }
-            if (!result.ok) process.exitCode = 5
+            await execute(json, () => run(config), renderDeploy)
         } catch (e) {
-            const kind = e instanceof WinkSftpError ? e.kind : 'error'
-            const message = e instanceof Error ? e.message : String(e)
-            if (json) {
-                process.stdout.write(JSON.stringify({ ok: false, kind, error: message }) + '\n')
-            } else {
-                console.error('执行失败：', message)
+            handleError(e, json)
+        }
+    })
+
+// pull（下载）：把远程文件/目录拉取到本地
+addConnectionOptions(program.command('pull'))
+    .description('从远程下载文件/目录到本地（fastGet，目录递归镜像）')
+    .option('-l --local <local>', '本地目标路径')
+    .option('-r --remote <remote>', '远程源路径')
+    .option('--sftp-concurrency <n>', '下载并发上限，默认为5')
+    .option('--sftp-retries <n>', '单文件下载失败的额外重试次数，默认为2')
+    .action(async (options: Record<string, unknown>) => {
+        const json = Boolean(options.json)
+        try {
+            const concurrency = options.sftpConcurrency !== undefined ? Number(options.sftpConcurrency) : undefined
+            const retries = options.sftpRetries !== undefined ? Number(options.sftpRetries) : undefined
+            const config: RunOption = {
+                ...buildBase(options),
+                local: options.local as string | undefined,
+                remote: options.remote as string | undefined,
+                sftpOptions: { concurrency, retries, debug: options.debug } as SftpOption,
             }
-            process.exitCode = exitCodeOf(e)
+            await execute(json, () => pull(config), renderPull)
+        } catch (e) {
+            handleError(e, json)
+        }
+    })
+
+// ls（远程浏览）：列出远程目录内容（只读）
+addConnectionOptions(program.command('ls'))
+    .description('列出远程目录内容（只读）')
+    .argument('[remote]', '要列出的远程目录（不带 -c 时亦可用 -r 指定）')
+    .option('-r --remote <remote>', '远程目录路径')
+    .action(async (remoteArg: string | undefined, options: Record<string, unknown>) => {
+        const json = Boolean(options.json)
+        try {
+            const config: RunOption = {
+                ...buildBase(options),
+                remote: (remoteArg ?? options.remote) as string | undefined,
+            }
+            await execute(json, () => ls(config), renderLs, 1)
+        } catch (e) {
+            handleError(e, json)
         }
     })
 

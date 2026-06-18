@@ -192,8 +192,16 @@ const applyEnv = (raw: RunOption, selected?: string): RunOption => {
     return deepMerge(raw as Record<string, unknown>, override as Record<string, unknown>) as RunOption
 }
 
+/** {@link resolveConfig} 选项：`requireLocal=false` 用于只读命令（如 `ls`），不强制 `local`。 */
+export interface ResolveOptions {
+    requireLocal?: boolean
+}
+
 /** 合并配置文件 / CLI 选项并校验，返回归一化配置。校验失败抛 {@link ConfigError}。 */
-export const resolveConfig = (options: RunOption = {}): ResolvedConfig => {
+export const resolveConfig = (
+    options: RunOption = {},
+    { requireLocal = true }: ResolveOptions = {}
+): ResolvedConfig => {
     const { config = false } = options
     // json / dryRun / debug 是调用级开关，即便用 -c 配置文件也应生效（叠加在文件之上）。
     const cliDebug = options.debug ?? false
@@ -204,10 +212,18 @@ export const resolveConfig = (options: RunOption = {}): ResolvedConfig => {
     const connect = raw.connect ?? {}
     // 密码登录或密钥登录二选一：privateKey / agent 任一存在即可，允许密码留空
     const hasAuth = Boolean(connect.password) || Boolean(connect.privateKey) || Boolean(connect.agent)
-    if (!connect.host || !connect.port || !connect.username || !hasAuth || !raw.local || !raw.remote) {
+    if (
+        !connect.host ||
+        !connect.port ||
+        !connect.username ||
+        !hasAuth ||
+        (requireLocal && !raw.local) ||
+        !raw.remote
+    ) {
         throw new ConfigError(
             '配置至少包含以下属性：connect.host、connect.port、connect.username、' +
-                'connect.password 或 connect.privateKey（或 connect.agent）、local、remote'
+                'connect.password 或 connect.privateKey（或 connect.agent）、' +
+                (requireLocal ? 'local、remote' : 'remote')
         )
     }
     const debug = raw.debug ?? cliDebug
@@ -215,7 +231,7 @@ export const resolveConfig = (options: RunOption = {}): ResolvedConfig => {
     sftpOptions.debug ??= debug
     return {
         connect,
-        local: raw.local,
+        local: raw.local ?? '',
         remote: raw.remote,
         sftpOptions,
         debug,

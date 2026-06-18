@@ -1,8 +1,9 @@
 import { Client } from 'ssh2'
 import type { ConnectConfig, SFTPWrapper, Stats } from 'ssh2'
 import fs from 'node:fs'
+import path from 'node:path'
 import { scan, loadIgnorePatterns } from './scanner'
-import { resolveLocal, remoteIsDir, buildRemoteTarget, buildRemoteDir, findFlatCollisions } from './pathmap'
+import { resolveLocal, linuxPath, remoteIsDir, buildRemoteTarget, buildRemoteDir, findFlatCollisions } from './pathmap'
 import { execCommand, shellQuote } from './exec'
 import { mapPool, DEFAULT_CONCURRENCY } from './pool'
 import { withRetry, DEFAULT_RETRIES } from './retry'
@@ -91,6 +92,43 @@ export interface DeployResult {
     warnings: string[]
 }
 
+/** 远程目录中的一项（`ls` 结果元素）。 */
+export interface RemoteEntry {
+    /** 文件名（不含路径）。 */
+    name: string
+    /** 类型：文件 / 目录 / 符号链接 / 其它。 */
+    type: 'file' | 'dir' | 'link' | 'other'
+    /** 字节大小。 */
+    size: number
+    /** 修改时间（秒）。 */
+    mtime: number
+}
+
+/** `ls` 远程浏览结果。 */
+export interface LsResult {
+    ok: true
+    /** 被列出的远程目录。 */
+    remote: string
+    /** 目录项（按名称排序）。 */
+    entries: RemoteEntry[]
+}
+
+/** `pull` 下载结果。 */
+export interface PullResult {
+    /** 是否全部成功（无失败文件）。 */
+    ok: boolean
+    /** 本地根目录（绝对路径）。 */
+    local: string
+    /** 远程源路径。 */
+    remote: string
+    /** 已下载的本地文件路径。 */
+    downloaded: string[]
+    /** 下载失败的远程源及原因。 */
+    failed: { target: string; error: string }[]
+    /** 已创建的本地目录。 */
+    dirs: string[]
+}
+
 const DEFAULT_MODE = 0o777
 
 /** 校验 clear 目标路径安全：非空、非 `/`、至少含一个有效路径段。 */
@@ -120,11 +158,17 @@ const remoteExists = async (client: Client, target: string): Promise<boolean> =>
     }
 }
 
-/** 取远程文件 size 与 mtime（秒）；不存在或出错返回 null，绝不抛错。 */
-const remoteStat = (sftp: SFTPWrapper, target: string): Promise<{ size: number; mtime: number } | null> =>
+/** 取远程文件完整 `Stats`；不存在或出错返回 null，绝不抛错。 */
+const statRemote = (sftp: SFTPWrapper, target: string): Promise<Stats | null> =>
     new Promise((resolve) => {
-        sftp.stat(target, (err, stats: Stats) => resolve(err ? null : { size: stats.size, mtime: stats.mtime }))
+        sftp.stat(target, (err, stats: Stats) => resolve(err ? null : stats))
     })
+
+/** 取远程文件 size 与 mtime（秒）；不存在或出错返回 null，绝不抛错。 */
+const remoteStat = async (sftp: SFTPWrapper, target: string): Promise<{ size: number; mtime: number } | null> => {
+    const stats = await statRemote(sftp, target)
+    return stats ? { size: stats.size, mtime: stats.mtime } : null
+}
 
 /**
  * 增量判定：远程已存在、size 相同、且远程 mtime ≥ 本地 mtime（秒）时视为未变更。
@@ -231,8 +275,8 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
         try {
             // 增量优先：远程未变更则跳过；否则覆盖传输（不再看 override）
             if (opts.incremental) {
-                const remote = await remoteStat(sftp, target)
-                if (remote && isUnchanged(fs.statSync(file), remote)) {
+                const remoteInfo = await remoteStat(sftp, target)
+                if (remoteInfo && isUnchanged(fs.statSync(file), remoteInfo)) {
                     logger.debug('增量比对未变更，跳过：' + target)
                     skipped.push(target)
                     progress('跳过', target)
@@ -281,21 +325,25 @@ const deploy = async (client: Client, config: ResolvedConfig, logger: Logger): P
     }
 }
 
-const connectAndDeploy = (config: ResolvedConfig, logger: Logger): Promise<DeployResult> =>
+/**
+ * 通用连接运行器：新建独立 `ssh2.Client`，连接成功后在其上运行 `fn`，结束后断开。
+ * 连接失败 / 超时 reject 类型化 {@link ConnectionError}。部署 / 下载 / 浏览共用。
+ */
+const withConnection = <T>(connect: ConnectConfig, logger: Logger, fn: (client: Client) => Promise<T>): Promise<T> =>
     new Promise((resolve, reject) => {
         const client = new Client()
         let settled = false
-        const finish = (fn: () => void) => {
+        const finish = (fn2: () => void) => {
             if (!settled) {
                 settled = true
-                fn()
+                fn2()
             }
         }
         client
             .on('ready', async () => {
                 logger.debug('连接成功')
                 try {
-                    const result = await deploy(client, config, logger)
+                    const result = await fn(client)
                     finish(() => resolve(result))
                 } catch (e) {
                     finish(() => reject(e))
@@ -305,7 +353,7 @@ const connectAndDeploy = (config: ResolvedConfig, logger: Logger): Promise<Deplo
             })
             .on('error', (err) => finish(() => reject(new ConnectionError('SSH 连接失败', { cause: err }))))
             .on('timeout', () => finish(() => reject(new ConnectionError('SSH 会话超时'))))
-            .connect(config.connect)
+            .connect(connect)
     })
 
 /** 记录一条审计；写入失败仅降级为 debug 日志，绝不中断主流程。 */
@@ -339,7 +387,7 @@ export const run = async (options?: RunOption): Promise<DeployResult> => {
     logger.debug('解析后的配置：', config)
     if (config.dryRun) return planDeploy(config)
     try {
-        const result = await connectAndDeploy(config, logger)
+        const result = await withConnection(config.connect, logger, (client) => deploy(client, config, logger))
         recordAudit(config, logger, result.ok, {
             transferred: result.transferred.length,
             skipped: result.skipped.length,
@@ -351,4 +399,135 @@ export const run = async (options?: RunOption): Promise<DeployResult> => {
         recordAudit(config, logger, false, { error: e instanceof Error ? e.message : String(e) })
         throw e
     }
+}
+
+/** 把远程 `Stats` 归类为 {@link RemoteEntry} 的 type。 */
+const classify = (attrs: Stats): RemoteEntry['type'] =>
+    attrs.isDirectory() ? 'dir' : attrs.isSymbolicLink() ? 'link' : attrs.isFile() ? 'file' : 'other'
+
+/** 列出远程目录（按名称排序）。读取失败抛 {@link TransferError}。 */
+const readdir = (sftp: SFTPWrapper, dir: string): Promise<RemoteEntry[]> =>
+    new Promise((resolve, reject) => {
+        sftp.readdir(dir, (err, list) => {
+            if (err) {
+                reject(new TransferError(`读取远程目录失败：${dir}`, { cause: err }))
+                return
+            }
+            resolve(
+                list
+                    .map((e) => ({
+                        name: e.filename,
+                        type: classify(e.attrs),
+                        size: e.attrs.size,
+                        mtime: e.attrs.mtime,
+                    }))
+                    .toSorted((a, b) => a.name.localeCompare(b.name))
+            )
+        })
+    })
+
+/** 递归遍历远程目录，收集所有文件与目录的绝对 POSIX 路径。 */
+const walkRemote = async (sftp: SFTPWrapper, root: string): Promise<{ files: string[]; dirs: string[] }> => {
+    const files: string[] = []
+    const dirs: string[] = []
+    const recurse = async (dir: string): Promise<void> => {
+        dirs.push(dir)
+        const entries = await readdir(sftp, dir)
+        for (const e of entries) {
+            const full = linuxPath(dir, e.name)
+            // 顺序递归子目录：远程目录树通常不深，避免一次性打开过多 SFTP 会话
+            // eslint-disable-next-line no-await-in-loop
+            if (e.type === 'dir') await recurse(full)
+            else if (e.type === 'file') files.push(full)
+        }
+    }
+    await recurse(root)
+    return { files, dirs }
+}
+
+const fastGet = (sftp: SFTPWrapper, remote: string, local: string): Promise<void> =>
+    new Promise((resolve, reject) => {
+        sftp.fastGet(remote, local, (err) =>
+            err ? reject(new TransferError(`下载失败：${remote} => ${local}`, { cause: err })) : resolve()
+        )
+    })
+
+/**
+ * 远程文件浏览：列出 `remote` 指向的目录内容（只读，不写审计）。
+ * 需要 connect + remote；不需要 local。失败 reject 类型化错误。
+ */
+export const ls = async (options?: RunOption): Promise<LsResult> => {
+    const config = resolveConfig(options, { requireLocal: false })
+    const logger = new Logger({ debug: config.debug, json: config.json })
+    logger.debug('解析后的配置：', config)
+    return withConnection(config.connect, logger, async (client) => {
+        const sftp = await openSftp(client)
+        const entries = await readdir(sftp, config.remote)
+        return { ok: true, remote: config.remote, entries }
+    })
+}
+
+/**
+ * 下载：把远程 `remote`（文件或目录）拉取到本地 `local`，镜像目录结构。
+ * 受限并发 + 单文件失败重试。远程为目录时递归下载；为文件时下载单个文件。
+ */
+export const pull = async (options?: RunOption): Promise<PullResult> => {
+    const config = resolveConfig(options)
+    const logger = new Logger({ debug: config.debug, json: config.json })
+    logger.debug('解析后的配置：', config)
+    const localRoot = resolveLocal(config.local)
+    const remote = config.remote
+    const opts = config.sftpOptions
+    const concurrency = opts.concurrency ?? DEFAULT_CONCURRENCY
+    const retries = opts.retries ?? DEFAULT_RETRIES
+    return withConnection(config.connect, logger, async (client) => {
+        const sftp = await openSftp(client)
+        const stats = await statRemote(sftp, remote)
+        if (!stats) throw new TransferError(`远程路径不存在：${remote}`)
+
+        let jobs: { remoteFile: string; localFile: string }[]
+        let dirs: string[]
+        if (stats.isDirectory()) {
+            const walked = await walkRemote(sftp, remote)
+            jobs = walked.files.map((rf) => ({
+                remoteFile: rf,
+                localFile: path.join(localRoot, path.posix.relative(remote, rf)),
+            }))
+            dirs = walked.dirs.map((d) => path.join(localRoot, path.posix.relative(remote, d)))
+        } else {
+            // 单文件：local 已存在且是目录则落到 local/<basename>，否则把 local 当作目标文件路径
+            const localIsDir = fs.existsSync(localRoot) && fs.statSync(localRoot).isDirectory()
+            const localFile = localIsDir ? path.join(localRoot, path.posix.basename(remote)) : localRoot
+            jobs = [{ remoteFile: remote, localFile }]
+            dirs = [path.dirname(localFile)]
+        }
+
+        const uniqueDirs = [...new Set(dirs)]
+        for (const d of uniqueDirs) fs.mkdirSync(d, { recursive: true })
+
+        const downloaded: string[] = []
+        const failed: PullResult['failed'] = []
+        const total = jobs.length
+        let done = 0
+        const progress = (status: string, target: string) => logger.info(`[${++done}/${total}] ${status} ${target}`)
+        await mapPool(jobs, concurrency, async ({ remoteFile, localFile }) => {
+            try {
+                fs.mkdirSync(path.dirname(localFile), { recursive: true })
+                await withRetry(() => fastGet(sftp, remoteFile, localFile), {
+                    retries,
+                    delayMs: 200,
+                    onRetry: (attempt, e) =>
+                        logger.warn(
+                            `下载失败，重试 ${attempt}/${retries}：${remoteFile}（${e instanceof Error ? e.message : String(e)}）`
+                        ),
+                })
+                downloaded.push(localFile)
+                progress('已下', localFile)
+            } catch (e) {
+                failed.push({ target: remoteFile, error: e instanceof Error ? e.message : String(e) })
+                progress('失败', remoteFile)
+            }
+        })
+        return { ok: failed.length === 0, local: localRoot, remote, downloaded, failed, dirs: uniqueDirs }
+    })
 }
