@@ -1,3 +1,19 @@
+## v2.2.0
+
+[compare changes](https://github.com/x-wink/wink-sftp/compare/v2.1.0...v2.2.0)
+
+### 🚀 Enhancements
+
+- 新增 ps 进程快照与 service 服务管理运维原语 ([a8c8110](https://github.com/x-wink/wink-sftp/commit/a8c8110))
+
+### 🩹 Fixes
+
+- **ops:** 修复发版前 code-review 发现的 ps/service 边角问题 ([43b4111](https://github.com/x-wink/wink-sftp/commit/43b4111))
+
+### ❤️ Contributors
+
+- Xwink <1041367524@qq.com>
+
 ## v2.1.0
 
 [compare changes](https://github.com/x-wink/wink-sftp/compare/v2.0.1...v2.1.0)
