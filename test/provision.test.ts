@@ -38,6 +38,10 @@ describe('normalizeDesired', () => {
     it('对象缺 version → 抛错', () => {
         expect(() => normalizeDesired('redis', { mode: 'docker' } as never)).toThrow(/version/)
     })
+    it('空字符串 / 纯空白版本 → 抛错（防 nvm install ""）', () => {
+        expect(() => normalizeDesired('nodejs', '')).toThrow(/为空/)
+        expect(() => normalizeDesired('nodejs', '   ')).toThrow(/为空/)
+    })
 })
 
 describe('recipe: nodejs (nvm)', () => {
@@ -62,11 +66,17 @@ describe('recipe: jdk (sdkman)', () => {
     const r = RECIPES.jdk
     it('parse 取 java -version 引号内版本（openjdk / 老 1.8 两式）', () => {
         expect(r.parse('openjdk version "17.0.9" 2023-10-17')).toEqual({ installed: true, version: '17.0.9' })
-        expect(r.parse('java version "1.8.0_292"')).toEqual({ installed: true, version: '1.8.0_292' })
+        // 老式 1.8.0_292 归一为 8.0.292（旧 1.X 编号的 X 才是真实大版本，下划线补丁位转点）
+        expect(r.parse('java version "1.8.0_292"')).toEqual({ installed: true, version: '8.0.292' })
         expect(r.parse('')).toEqual({ installed: false, version: null })
     })
     it('已满足（前缀匹配）→ satisfied', () => {
         expect(r.converge('17', { installed: true, version: '17.0.9' }).satisfied).toBe(true)
+    })
+    it('旧式 Java 8 归一后 jdk:8 能命中已装版本（幂等，不重装）', () => {
+        const state = r.parse('openjdk version "1.8.0_292"')
+        expect(state.version).toBe('8.0.292')
+        expect(r.converge('8', state).satisfied).toBe(true)
     })
     it('未满足 → 装 sdkman + sdk install java，版本经 shellQuote', () => {
         const plan = r.converge('17.0.9-tem', { installed: false, version: null })

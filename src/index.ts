@@ -225,10 +225,10 @@ const renderProvision = (r: ProvisionResult): void => {
         }
         const mark = c.ok ? '↻' : '✗'
         console.error(`  ${mark} ${c.component}：目标 ${c.desired}，当前 ${cur}`)
-        const steps = r.dryRun ? c.planned : c.executed
-        for (const s of steps) {
-            const tag = r.dryRun ? '·' : 'ok' in s && (s as { ok: boolean }).ok ? '✓' : '✗'
-            console.error(`    ${tag} ${s.description}`)
+        if (r.dryRun) {
+            for (const s of c.planned) console.error(`    · ${s.description}`)
+        } else {
+            for (const s of c.executed) console.error(`    ${s.ok ? '✓' : '✗'} ${s.description}`)
         }
     }
 }

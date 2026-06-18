@@ -38,7 +38,15 @@ export type {
 export { edit } from './edit'
 export type { EditOptions, EditResult } from './edit'
 export { provision, versionSatisfies, normalizeDesired, RECIPES } from './provision'
-export type { ProvisionResult, ComponentResult, Recipe, DetectState, PlanStep, ConvergePlan } from './provision'
+export type {
+    ProvisionResult,
+    ComponentResult,
+    StepResult,
+    Recipe,
+    DetectState,
+    PlanStep,
+    ConvergePlan,
+} from './provision'
 export { resolveConfig, loadConfigFile } from './config'
 export { execCommand, shellQuote } from './exec'
 export type { ExecResult } from './exec'

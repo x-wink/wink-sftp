@@ -32,6 +32,14 @@ export interface PlanStep {
     command: string
 }
 
+/** 已执行步骤的结果：在 {@link PlanStep} 基础上带执行产物（退出码非零即 `ok=false`）。 */
+export interface StepResult extends PlanStep {
+    ok: boolean
+    stdout: string
+    stderr: string
+    code: number
+}
+
 /** recipe 的收敛规划结果。 */
 export interface ConvergePlan {
     /** 当前状态是否已满足目标（满足则 `steps` 为空，体现幂等）。 */
@@ -83,7 +91,11 @@ export const versionSatisfies = (desired: string, detected: string | null): bool
 export const normalizeDesired = (component: string, value: StackValue): string | null => {
     if (value === false) return null
     if (value === true) return 'true'
-    if (typeof value === 'string' || typeof value === 'number') return String(value)
+    if (typeof value === 'string' || typeof value === 'number') {
+        const s = String(value).trim()
+        if (!s) throw new ConfigError(`组件 ${component} 的版本声明为空`)
+        return s
+    }
     if (value && typeof value === 'object') {
         const v = (value as Record<string, unknown>).version
         if (v === undefined) throw new ConfigError(`组件 ${component} 缺少 version 字段`)
@@ -128,9 +140,18 @@ const nodejs: Recipe = {
 /** JDK（经 sdkman 版本管理；version 用 sdkman 候选标识，如 `17.0.9-tem`）。 */
 const jdk: Recipe = {
     component: 'jdk',
-    detect: 'export SDKMAN_DIR="${SDKMAN_DIR:-$HOME/.sdkman}"; [ -s "$SDKMAN_DIR/bin/sdkman-init.sh" ] && . "$SDKMAN_DIR/bin/sdkman-init.sh"; java -version 2>&1 | head -n 1 || true',
-    // java -version 形如 `openjdk version "17.0.9" 2023-...` 或 `java version "1.8.0_292"`
-    parse: (out) => parseVersion(out, /version "(\d[\d._]*)"/),
+    // 取含 version 的那一行（用 grep 过滤掉 `Picked up JAVA_TOOL_OPTIONS` 等噪声首行）
+    detect: 'export SDKMAN_DIR="${SDKMAN_DIR:-$HOME/.sdkman}"; [ -s "$SDKMAN_DIR/bin/sdkman-init.sh" ] && . "$SDKMAN_DIR/bin/sdkman-init.sh"; java -version 2>&1 | grep -i version | head -n 1 || true',
+    // java -version 形如 `openjdk version "17.0.9" 2023-...` 或老式 `java version "1.8.0_292"`。
+    // 归一：旧 1.X 编号的 X 才是真实大版本（`1.8.0_292` → `8.0.292`），下划线补丁位转点——
+    // 否则 `jdk: '8'` 永远命中不了已装的 Java 8（'8' 比到首段 '1'），破坏幂等。
+    parse: (out) => {
+        const m = out.match(/version "(\d[\d._]*)"/)
+        if (!m) return { installed: false, version: null }
+        let v = m[1].replace(/_/g, '.')
+        if (v.startsWith('1.')) v = v.slice(2)
+        return { installed: true, version: v }
+    },
     converge: (desired, state) => {
         if (state.installed && versionSatisfies(desired, state.version)) return { satisfied: true, steps: [] }
         const v = shellQuote(desired)
@@ -209,7 +230,7 @@ export interface ComponentResult {
     /** 计划执行的步骤（预演与实跑都会给出，便于可见）。 */
     planned: PlanStep[]
     /** 已执行步骤的结果（预演为空）。 */
-    executed: { description: string; command: string; ok: boolean; stdout: string; stderr: string; code: number }[]
+    executed: StepResult[]
     /** 该组件是否成功（已满足、或全部步骤退出码 0）。 */
     ok: boolean
 }
