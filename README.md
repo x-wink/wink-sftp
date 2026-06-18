@@ -37,6 +37,9 @@
 - 🪝 传输前后执行远程命令（停服 / 重启 / 解压…），前置命令在扫描前执行，产物可纳入传输
 - 🧹 可选清空远程目录、覆盖已有文件、扁平化目录结构（flat 同名覆盖会预警）
 - ⏩ 增量传输：按 size + mtime 比对，只传变更文件
+- 🌐 多机并行部署：`hosts` 数组一次发布多台，可选 fail-fast / continue 失败策略
+- ⛁ 文件级备份与回滚：部署前快照远程目标，失败自动回滚，`--rollback` 手动恢复
+- 🧩 稳定的编程式 API：`import { SshSession, run, runMany, guard } from '@xwink/sftp'` 供 Node 脚本集成
 - 🙈 自动跳过隐藏文件，支持按路径排除与 `.winksftpignore`（gitignore 风格 glob）
 - ⚡ 受限并发传输 + 单文件失败自动重试，扛得住数百文件与网络抖动
 - 📋 写操作本地审计日志（何时 / 哪台 / 什么动作 / 结果）
@@ -121,30 +124,34 @@ npx wink-sftp -c ./sftp.json
 
 ### 配置项
 
-| 字段                           | 类型     | 默认    | 说明                                                          |
-| ------------------------------ | -------- | ------- | ------------------------------------------------------------- |
-| `local`                        | string   | —       | 本地路径（必填）                                              |
-| `remote`                       | string   | —       | 远程路径（必填）                                              |
-| `debug`                        | boolean  | `false` | 输出调试日志（走 stderr）                                     |
-| `connect.host`                 | string   | —       | 远程服务器地址（必填）                                        |
-| `connect.port`                 | number   | —       | 远程服务器端口（必填）                                        |
-| `connect.username`             | string   | —       | 用户名（必填）                                                |
-| `connect.password`             | string   | —       | 密码（与 `privateKey` 二选一）                                |
-| `connect.privateKey`           | string   | —       | 私钥内容（密钥登录，与 `password` 二选一）                    |
-| `connect.passphrase`           | string   | —       | 私钥口令（加密私钥时需要）                                    |
-| `sftpOptions.excludes`         | string[] | `[]`    | 要排除的本地目录，仅支持全字匹配                              |
-| `sftpOptions.ignore`           | string[] | `[]`    | gitignore 风格忽略规则（与 `.winksftpignore` 合并）           |
-| `sftpOptions.flat`             | boolean  | `false` | 扁平化目录：任意深度的文件都直接传到远程目录下                |
-| `sftpOptions.clear`            | boolean  | `false` | 传输前清空远程目录（高危，见安全须知）                        |
-| `sftpOptions.override`         | boolean  | `false` | 覆盖远程已存在的同名文件                                      |
-| `sftpOptions.incremental`      | boolean  | `false` | 增量传输：按 size+mtime 比对，只传变更文件（优先于 override） |
-| `sftpOptions.ignoreHidden`     | boolean  | `true`  | 忽略隐藏文件/目录（以 `.` 开头的路径段）                      |
-| `sftpOptions.mode`             | number   | `0o777` | 远程文件权限 mode                                             |
-| `sftpOptions.concurrency`      | number   | `5`     | 传输与建目录的并发上限（避免打满 `MaxSessions`）              |
-| `sftpOptions.retries`          | number   | `2`     | 单文件传输失败的额外重试次数（线性退避）                      |
-| `sftpOptions.beforeRunCommand` | string   | —       | 传输开始前执行的远程命令（在扫描前执行）                      |
-| `sftpOptions.afterRunCommand`  | string   | —       | 传输完成后执行的远程命令                                      |
-| `environments`                 | object   | —       | 多环境覆盖表：`{ <env>: { 同上字段 } }`，`--env` 选择         |
+| 字段                           | 类型     | 默认    | 说明                                                                 |
+| ------------------------------ | -------- | ------- | -------------------------------------------------------------------- |
+| `local`                        | string   | —       | 本地路径（必填）                                                     |
+| `remote`                       | string   | —       | 远程路径（必填）                                                     |
+| `debug`                        | boolean  | `false` | 输出调试日志（走 stderr）                                            |
+| `connect.host`                 | string   | —       | 远程服务器地址（必填）                                               |
+| `connect.port`                 | number   | —       | 远程服务器端口（必填）                                               |
+| `connect.username`             | string   | —       | 用户名（必填）                                                       |
+| `connect.password`             | string   | —       | 密码（与 `privateKey` 二选一）                                       |
+| `connect.privateKey`           | string   | —       | 私钥内容（密钥登录，与 `password` 二选一）                           |
+| `connect.passphrase`           | string   | —       | 私钥口令（加密私钥时需要）                                           |
+| `sftpOptions.excludes`         | string[] | `[]`    | 要排除的本地目录，仅支持全字匹配                                     |
+| `sftpOptions.ignore`           | string[] | `[]`    | gitignore 风格忽略规则（与 `.winksftpignore` 合并）                  |
+| `sftpOptions.flat`             | boolean  | `false` | 扁平化目录：任意深度的文件都直接传到远程目录下                       |
+| `sftpOptions.clear`            | boolean  | `false` | 传输前清空远程目录（高危，见安全须知）                               |
+| `sftpOptions.override`         | boolean  | `false` | 覆盖远程已存在的同名文件                                             |
+| `sftpOptions.incremental`      | boolean  | `false` | 增量传输：按 size+mtime 比对，只传变更文件（优先于 override）        |
+| `sftpOptions.backup`           | boolean  | `false` | 部署前对已存在的远程目标快照，失败自动回滚（见下「备份与回滚」）     |
+| `sftpOptions.ignoreHidden`     | boolean  | `true`  | 忽略隐藏文件/目录（以 `.` 开头的路径段）                             |
+| `sftpOptions.mode`             | number   | `0o777` | 远程文件权限 mode                                                    |
+| `sftpOptions.concurrency`      | number   | `5`     | 传输与建目录的并发上限（避免打满 `MaxSessions`）                     |
+| `sftpOptions.retries`          | number   | `2`     | 单文件传输失败的额外重试次数（线性退避）                             |
+| `sftpOptions.beforeRunCommand` | string   | —       | 传输开始前执行的远程命令（在扫描前执行）                             |
+| `sftpOptions.afterRunCommand`  | string   | —       | 传输完成后执行的远程命令                                             |
+| `environments`                 | object   | —       | 多环境覆盖表：`{ <env>: { 同上字段 } }`，`--env` 选择                |
+| `hosts`                        | object[] | —       | 多机部署：每台主机的连接覆盖（叠加到 `connect` 之上，至少含 `host`） |
+| `failFast`                     | boolean  | `false` | 多机失败策略：`true` 首台失败即停；`false` 跑完所有主机再汇总        |
+| `hostConcurrency`              | number   | `5`     | 多机：同时部署的主机数上限                                           |
 
 ## ⌨️ 命令行选项
 
@@ -167,6 +174,11 @@ npx wink-sftp -c ./sftp.json
 | `--sftp-clear`                  | `sftpOptions.clear`            | 传输前清空远程目录（高危）                     |
 | `-o, --sftp-override`           | `sftpOptions.override`         | 覆盖已存在文件                                 |
 | `--sftp-incremental`            | `sftpOptions.incremental`      | 增量传输（size+mtime 比对，只传变更文件）      |
+| `--sftp-backup`                 | `sftpOptions.backup`           | 部署前快照远程目标，失败自动回滚               |
+| `--rollback`                    | —                              | 手动回滚：恢复到最近一次 `--sftp-backup` 快照  |
+| `--hosts <list>`                | `hosts`                        | 多机部署：逗号分隔的主机地址（共用端口/凭据）  |
+| `--fail-fast`                   | `failFast`                     | 多机：首台失败即停止                           |
+| `--host-concurrency <n>`        | `hostConcurrency`              | 多机：同时部署的主机数上限（默认 5）           |
 | `-i, --sftp-ignore-hidden`      | `sftpOptions.ignoreHidden`     | 忽略隐藏文件/目录                              |
 | `-m, --sftp-mode <mode>`        | `sftpOptions.mode`             | 远程文件 mode（按八进制解析，如 `755`）        |
 | `--sftp-concurrency <n>`        | `sftpOptions.concurrency`      | 传输与建目录的并发上限（默认 5）               |
@@ -260,6 +272,83 @@ npx wink-sftp -c ./sftp.json --sftp-incremental
 
 > 增量优先级高于 `override`：未变更则跳过，变更则覆盖。`--dry-run` 不连接，故预演结果不体现增量跳过。
 
+## 🌐 多机并行部署
+
+一次把同一份产物发布到多台主机。各主机共用 `connect` 的端口/用户/凭据，只在 `hosts` 里给出地址（或写各自完整连接）：
+
+```bash
+# 命令行：逗号分隔主机地址，凭据走公共连接选项
+npx wink-sftp -l dist -r /var/www/app -p 22 -u deploy --connect-private-key ~/.ssh/id_ed25519 \
+  --hosts 10.0.0.1,10.0.0.2,10.0.0.3 --json
+```
+
+```jsonc
+// 配置文件：hosts 可写每台的连接覆盖
+{
+    "connect": { "port": 22, "username": "deploy", "privateKey": "${DEPLOY_KEY}" },
+    "local": "dist",
+    "remote": "/var/www/app",
+    "hosts": [{ "host": "10.0.0.1" }, { "host": "10.0.0.2" }, { "host": "10.0.0.3", "port": 2222 }],
+    "failFast": false, // 默认：跑完所有主机再汇总；true 则首台失败即停
+    "hostConcurrency": 5, // 同时部署的主机数上限
+}
+```
+
+- **失败策略**：默认 `continue`（受限并发跑完所有主机，再聚合）；`--fail-fast` 顺序执行、首台失败即停、跳过其余。
+- 结果为按主机聚合的 JSON（`{ ok, hosts: [{ host, ok, result|error }] }`）；任一主机失败则整体退出码非零。
+- 单台主机的连接/配置错误只记在该主机的 `error` 上，不影响其它主机。
+
+## ⛁ 文件级备份与回滚
+
+开启 `--sftp-backup` 后，部署前会对**已存在**的远程目标做快照（`cp -a` 到 `<remote>.wink-bak.<时间戳>`）；若任一文件传输失败则**自动回滚**到快照（回滚后不执行 `afterRunCommand`），成功则保留快照备查：
+
+```bash
+npx wink-sftp -c ./sftp.json --sftp-backup --json
+```
+
+需要主动撤销上一次部署时，用 `--rollback` 恢复到最近一次快照：
+
+```bash
+npx wink-sftp -r /var/www/app -h 1.2.3.4 -u deploy --connect-password '***' --rollback --json
+```
+
+> 边界：回滚为**文件级**——只还原目录/文件内容，**不撤销钩子副作用**（服务重启、数据库变更等）。
+
+## 🧩 编程式 API
+
+除 CLI 外，本包导出稳定的编程式 API，供 Node 脚本集成（`import` 不会触发 CLI）：
+
+```ts
+import { SshSession, run, runMany, guard } from '@xwink/sftp'
+
+// 1) 直接部署（结构化结果）
+const result = await run({
+    connect: { host: '1.2.3.4', port: 22, username: 'deploy', privateKey: key },
+    local: 'dist',
+    remote: '/var/www/app',
+    sftpOptions: { backup: true },
+})
+if (!result.ok) console.error(result.failed)
+
+// 2) 复用一个会话自由组合 exec / sftp
+const session = new SshSession({ host: '1.2.3.4', port: 22, username: 'deploy', password: pw })
+await session.open()
+const { stdout } = await session.exec('nginx -v')
+session.close()
+
+// 3) 守护式变更：备份→应用→校验→reload，失败自动回滚
+await guard(session, {
+    target: '/etc/nginx/nginx.conf',
+    apply: async () => {
+        /* 写入新配置 */
+    },
+    validate: 'nginx -t',
+    reload: 'systemctl reload nginx',
+})
+```
+
+> 还导出 `runMany`/`runAuto`/`pull`/`ls`/`rollback`、`withSession`、`backupRemote`/`restoreRemote` 及全部结果/错误类型。
+
 ## 🪝 传输前后执行命令
 
 常用于停服 / 重启 / 解压等场景：
@@ -351,7 +440,7 @@ done
 
 ## 🗺️ 路线图
 
-当前 `v1.x` 聚焦把「部署」这条线做到可信、好用：v1.1 完成安全/正确性止血与 `--json`/`--dry-run`；v1.2 加固健壮性（并发/重试）、补 SSH 密钥登录与审计、交付 deploy Skill；v1.3 增提效能力——`pull`/`ls` 双向传输、增量传输、`.winksftpignore`、多环境配置、JSON+YAML、`${ENV_VAR}` secrets。后续将逐步扩展为面向单机全生命周期的「SSH 快捷操作入口」。完整规划见 [docs/ROADMAP.md](./docs/ROADMAP.md) 与 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
+`v1.x` 把「部署」做到可信、好用：v1.1 安全/正确性止血与 `--json`/`--dry-run`；v1.2 加固健壮性（并发/重试）、SSH 密钥登录与审计、deploy Skill；v1.3 提效——`pull`/`ls` 双向传输、增量、`.winksftpignore`、多环境、JSON+YAML、`${ENV_VAR}` secrets。**v2.0 升级为编排工具**：多机并行部署、文件级备份/回滚、`guard` 守护式变更原语、`SshSession` 编程式 API。后续将逐步扩展为面向单机全生命周期的「SSH 快捷操作入口」。完整规划见 [docs/ROADMAP.md](./docs/ROADMAP.md) 与 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
 
 ## 🛠️ 本地开发
 

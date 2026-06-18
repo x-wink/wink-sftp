@@ -13,7 +13,7 @@
 | Phase 1 | v1.1       | 稳定与安全加固（止血） | ✅ 已完成   |
 | Phase 2 | v1.2       | 健壮性与工程化（加固） | ✅ 已完成   |
 | Phase 3 | v1.3       | 功能增强（提效）       | ✅ 已完成   |
-| Phase 4 | v2.0       | 能力扩展（编排）       | ⬜ 计划中   |
+| Phase 4 | v2.0       | 能力扩展（编排）       | ✅ 已完成   |
 | Phase 5 | v3.0       | 平台化（单机）         | ⬜ 计划中   |
 | Phase 6 | v4.0       | 规模化与可视化         | ⬜ 计划中   |
 | 专项    | 贯穿各版本 | 让 AI Agent 可调用     | 🔄 持续更新 |
@@ -111,16 +111,18 @@ Agent 协作：
 
 ---
 
-## Phase 4 — 能力扩展（v2.0，编排）⬜
+## Phase 4 — 能力扩展（v2.0，编排）✅
 
 > 目标：从「单机部署脚本」升级为「部署编排工具」，并沉淀 `guard` / `SshSession` 两个支柱共用的地基件。
+>
+> **状态：已完成。** 四项全部落地、各有单测 + e2e 守护。
 
-- **`guard` 守护式变更原语**：实现「备份 → 校验 → 原子替换 → reload → 失败回滚」通用流水线。它是 `clear` 安全、`edit`、provision `configure`、回滚的共同底座，作为独立地基件在此成形。
-- **多服务器并行部署**：`connect` 支持主机数组，一次发布多台并聚合结果。需明确**失败策略**（fail-fast 中断 vs continue 跑完再汇总，默认 continue）、并发主机上限、按主机聚合结果。（完整 inventory 分组在 Phase 6。）
-- **回滚 / 备份（仅文件级）**：部署前在远程对目标目录打快照（tar / mv），失败或 `--rollback` 时还原。**边界**：仅回滚文件，**不回滚钩子副作用**（服务重启、数据库变更等）。
-- **稳定的编程式 API**：导出 `SshSession` 的编程式 API 与类型（部署沿用 `SftpDeployer`），供 Node 脚本集成，也为初始化 / 运维支柱复用。
+- [x] **`guard` 守护式变更原语**（`src/guard.ts`）：「备份 → 应用 → 校验 → reload → 失败回滚」通用流水线（`guard` + `backupRemote`/`restoreRemote`/`existsRemote`），不抛错、把成败收进 `GuardResult`。它是 `edit`、provision `configure`、部署回滚的共同底座，作为独立地基件成形。
+- [x] **多服务器并行部署**（`runMany` / `runAuto`）：`hosts` 主机数组，一次发布多台并按主机聚合 `MultiDeployResult`。**失败策略**：默认 continue（受限并发跑完再汇总）/ `--fail-fast`（顺序、首台失败即停）；`--host-concurrency` 控主机并发。CLI `--hosts` 或配置文件 `hosts`。（完整 inventory 分组在 Phase 6。）
+- [x] **回滚 / 备份（仅文件级）**：`--sftp-backup` 部署前对已存在目标 `cp -a` 快照，任一文件失败**自动回滚**（回滚后不执行 afterRunCommand）；`--rollback` 手动恢复到最近快照。**边界**：仅回滚文件，**不回滚钩子副作用**（服务重启、数据库变更等）。
+- [x] **稳定的编程式 API**（`src/lib.ts` 库入口）：导出 `SshSession`（`open`/`exec`/`sftp`/`close`）+ `withSession`、`run`/`runMany`/`runAuto`/`pull`/`ls`/`rollback`、`guard` 及全部结果/错误类型，供 Node 脚本集成；`package.json` `main`/`types`/`exports` 指向库入口、`bin` 仍为 CLI 单文件。
 
-> 按需：生命周期钩子泛化（`preScan`/`preUpload`/`postUpload`/`onError`）——现有 before/after 已够用，待真实需求出现再做。
+> 按需：生命周期钩子泛化（`preScan`/`preUpload`/`postUpload`/`onError`）——现有 before/after 已够用，待真实需求出现再做。多机的完整 inventory/分组留待 Phase 6。
 
 ---
 
@@ -214,7 +216,7 @@ stack:
 ✅ v1.1  止血    安全/正确性 6 项 + --json/--dry-run + 测试骨架/CI    → 可信（CI / agent 可用）
 ✅ v1.2  加固    并发 / 重试 / 密钥登录 / 审计 / 测试完善 / deploy Skill → 抗规模、可生产、可协作
 ✅ v1.3  提效    pull 下载 / ls / 增量 / ignore / 多环境 / JSON+YAML / secrets → 好用
-⬜ v2.0  扩展    guard 原语 / 多机 / 文件级回滚 / 编程 API（SshSession）  → 编排工具
+✅ v2.0  扩展    guard 原语 / 多机 / 文件级回滚 / 编程 API（SshSession）  → 编排工具
 ⬜ v3.0  平台    单机 provision + status/logs/ps/edit 只读原语          → 单机全生命周期
 ⬜ v4.0  规模    inventory / 多机批量 / ink TUI / daemon + notifier      → 多机舰队 + 可视化
 ```
