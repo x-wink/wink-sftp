@@ -40,11 +40,13 @@ vi.mock('ssh2', () => {
             const stream = new Emitter() as Emitter & { stderr: Emitter }
             stream.stderr = new Emitter()
             cb(null, stream)
-            // 先吐 stdout/stderr 数据块（供 stream() 流式回调验证），命令含 'fail' → 退出码 1，否则 0
+            // 先吐 stdout/stderr 数据块（供 stream() 流式回调验证）。
+            // 命令含 'abrupt' → 只发 close 不发 exit（模拟连接骤断）；含 'fail' → 退出码 1；否则 0
             setTimeout(() => {
                 stream.emit('data', Buffer.from('out\n'))
                 stream.stderr.emit('data', Buffer.from('err\n'))
-                stream.emit('exit', command.includes('fail') ? 1 : 0)
+                if (command.includes('abrupt')) stream.emit('close')
+                else stream.emit('exit', command.includes('fail') ? 1 : 0)
             }, 0)
         }
         sftp(cb: (err: unknown, sftp: unknown) => void) {
@@ -126,6 +128,15 @@ describe('SshSession', () => {
     it('未 open 即 stream：reject 会话未建立', async () => {
         const s = new SshSession({ host: 'ok', port: 22, username: 'u' })
         await expect(s.stream('ls')).rejects.toThrow(/会话未建立/)
+    })
+
+    it('stream 连接骤断（只 close 不 exit）：done 兜底 resolve 退出码 -1，不挂起', async () => {
+        const s = new SshSession({ host: 'ok', port: 22, username: 'u' })
+        await s.open()
+        const handle = await s.stream('do abrupt')
+        const { code } = await handle.done
+        expect(code).toBe(-1)
+        s.close()
     })
 
     it('raw 在 open 前为 null、open 后可取、close 后回到 null', async () => {

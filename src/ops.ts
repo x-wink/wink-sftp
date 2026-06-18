@@ -199,6 +199,11 @@ export interface StreamResult {
     code: number
 }
 
+/** {@link followLogs} 结果：流式结果 + 跟随的文件路径。 */
+export type FollowResult = StreamResult & { path: string }
+/** {@link streamExec} 结果：流式结果 + 执行的命令。 */
+export type StreamExecResult = StreamResult & { command: string }
+
 /**
  * 流式跟踪远程日志（`tail -n <lines> -f`，可选 `grep --line-buffered` 过滤）：每完整一行回调
  * `onLine`，直到流结束（文件被删 / 连接关闭 / 调用方终止进程）。路径与模式经 {@link shellQuote} 防注入。
@@ -207,8 +212,13 @@ export interface StreamResult {
 export const followLogs = async (
     remotePath: string,
     options: RunOption | undefined,
-    { lines = 200, grep, onLine }: { lines?: number; grep?: string; onLine: (line: string) => void }
-): Promise<StreamResult & { path: string }> => {
+    {
+        lines = 200,
+        grep,
+        onLine,
+        onStderr,
+    }: { lines?: number; grep?: string; onLine: (line: string) => void; onStderr?: (chunk: string) => void }
+): Promise<FollowResult> => {
     const config = resolveConfig(options, { requireLocal: false, requireRemote: false })
     const logger = new Logger({ debug: config.debug, json: config.json })
     const n = Number.isFinite(lines) && lines >= 1 ? Math.floor(lines) : 200
@@ -228,7 +238,8 @@ export const followLogs = async (
                 buf = buf.slice(idx + 1)
             }
         }
-        const handle = await session.stream(cmd, { onStdout: emit })
+        // 转发 stderr：tail -f 路径打错等错误会写 stderr，不透传则用户只见静默无输出
+        const handle = await session.stream(cmd, { onStdout: emit, onStderr })
         const { code } = await handle.done
         if (buf.length) onLine(buf.replace(/\r$/, '')) // 冲刷无尾换行的残留
         return { ok: code === 0, code, path: remotePath }
@@ -243,7 +254,7 @@ export const streamExec = async (
     command: string,
     options?: RunOption,
     handlers: StreamHandlers = {}
-): Promise<StreamResult & { command: string }> => {
+): Promise<StreamExecResult> => {
     const config = resolveConfig(options, { requireLocal: false, requireRemote: false })
     const logger = new Logger({ debug: config.debug, json: config.json })
     return withSession(config.connect, logger, async (session) => {

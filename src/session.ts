@@ -1,5 +1,6 @@
 import { Client } from 'ssh2'
 import type { ConnectConfig, SFTPWrapper } from 'ssh2'
+import { StringDecoder } from 'node:string_decoder'
 import { execCommand } from './exec'
 import type { ExecResult } from './exec'
 import { ConnectionError, RemoteCommandError } from './errors'
@@ -100,11 +101,27 @@ export class SshSession {
                     reject(new RemoteCommandError(`远程命令无法启动：${command}`, { command, cause: err }))
                     return
                 }
+                // done 必定 settle：正常以 exit 的退出码为准；连接骤断只来 close/error 时兜底为 -1，
+                // 避免 `await handle.done` 永久挂起（致 withSession 不断开、CLI 卡死）。同时挂 error
+                // 监听吞掉通道异常——否则 EventEmitter 无 error 监听会抛成 uncaughtException 崩溃进程。
                 const done = new Promise<{ code: number; signal?: string }>((res) => {
-                    stream.on('exit', (code: number | null, signal?: string) => res({ code: code ?? -1, signal }))
+                    let exited = false
+                    stream.on('exit', (code: number | null, signal?: string) => {
+                        exited = true
+                        res({ code: code ?? -1, signal })
+                    })
+                    stream.on('close', () => {
+                        if (!exited) res({ code: -1 })
+                    })
+                    stream.on('error', () => {
+                        if (!exited) res({ code: -1 })
+                    })
                 })
-                stream.on('data', (buf: Buffer) => handlers.onStdout?.(String(buf)))
-                stream.stderr.on('data', (buf: Buffer) => handlers.onStderr?.(String(buf)))
+                // StringDecoder 跨数据块维护多字节 UTF-8 边界：避免中文/emoji 被网络分片切碎成乱码
+                const outDec = new StringDecoder('utf8')
+                const errDec = new StringDecoder('utf8')
+                stream.on('data', (buf: Buffer) => handlers.onStdout?.(outDec.write(buf)))
+                stream.stderr.on('data', (buf: Buffer) => handlers.onStderr?.(errDec.write(buf)))
                 resolve({
                     done,
                     // 终止远程命令：尽力发信号 + 销毁本地通道（信号支持因服务端而异，连接关闭亦会终止远程）

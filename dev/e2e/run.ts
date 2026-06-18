@@ -49,6 +49,17 @@ const check = (name: string, cond: boolean, detail?: unknown): void => {
 
 const delay = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms))
 
+/** 轮询直到 pred 为真或超时，返回最终结果（事件驱动替代死等，降低流式用例的时序 flaky）。 */
+const waitFor = async (pred: () => boolean, ms = 6000): Promise<boolean> => {
+    const t0 = Date.now()
+    while (!pred() && Date.now() - t0 < ms) {
+        // 轮询固有顺序等待，非可并行任务
+        // eslint-disable-next-line no-await-in-loop
+        await delay(50)
+    }
+    return pred()
+}
+
 const main = async (): Promise<void> => {
     const server = await startTestServer()
     const port = String(server.port)
@@ -321,11 +332,11 @@ const main = async (): Promise<void> => {
         let fout = ''
         cpF.on('error', () => {}) // 杀进程后管道可能报错，兜底避免 unhandled 'error'
         cpF.stdout.on('data', (d) => (fout += d)).on('error', () => {})
-        await delay(900) // 等连接 + tail -f 起来并吐出初始行
+        await waitFor(() => fout.includes('initial-line')) // 等连接 + tail -f 起来并吐出初始行（事件驱动，非死等）
         fs.appendFileSync(followFile, 'streamed-line\n') // 运行中追加新行
-        await delay(900) // 等新行经 tail -f 流回
+        const gotStreamed = await waitFor(() => fout.includes('streamed-line')) // 等新行经 tail -f 流回
         cpF.kill('SIGKILL') // tail -f 不会自己结束，显式终止
-        check('收到初始行与运行中追加的新行', fout.includes('initial-line') && fout.includes('streamed-line'), { fout })
+        check('收到初始行与运行中追加的新行', fout.includes('initial-line') && gotStreamed, { fout })
 
         console.log('24) exec --stream：流式原样输出 + 退出码透传')
         const cpS = spawn(process.execPath, cliArgs(['exec', 'printf "s1\\ns2\\n"', '--stream', ...conn(pw)]), {

@@ -30,6 +30,8 @@ export type {
     StatusResult,
     LogsResult,
     StreamResult,
+    FollowResult,
+    StreamExecResult,
     DiskUsage,
     PsResult,
     ProcessInfo,

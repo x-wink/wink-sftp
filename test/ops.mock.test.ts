@@ -5,8 +5,8 @@ import { runExec, status, tailLogs, followLogs, streamExec, ps, service } from '
 const h = vi.hoisted(() => ({
     state: {
         execs: [] as string[],
-        // 命令子串 → { stdout, code }
-        responses: [] as { match: string; stdout: string; code?: number }[],
+        // 命令子串 → { stdout, stderr?, code }
+        responses: [] as { match: string; stdout: string; stderr?: string; code?: number }[],
     },
 }))
 
@@ -35,6 +35,7 @@ vi.mock('ssh2', () => {
             const resp = h.state.responses.find((r) => command.includes(r.match))
             setTimeout(() => {
                 if (resp?.stdout) stream.emit('data', Buffer.from(resp.stdout))
+                if (resp?.stderr) stream.stderr.emit('data', Buffer.from(resp.stderr))
                 stream.emit('exit', resp?.code ?? 0)
             }, 0)
         }
@@ -162,6 +163,14 @@ describe('followLogs', () => {
         await followLogs('/x', { connect: conn }, { lines: Number('abc'), onLine: (l) => lines.push(l) })
         expect(h.state.execs[0]).toContain('tail -n 200 -f')
         expect(lines).toEqual(['x'])
+    })
+
+    it('转发 stderr：tail 错误（如路径不存在）经 onStderr 透传，不静默失败', async () => {
+        h.state.responses = [{ match: 'tail', stdout: '', stderr: "tail: cannot open '/nope'\n", code: 1 }]
+        const errs: string[] = []
+        const r = await followLogs('/nope', { connect: conn }, { onLine: () => {}, onStderr: (c) => errs.push(c) })
+        expect(r.ok).toBe(false)
+        expect(errs.join('')).toContain('cannot open')
     })
 })
 

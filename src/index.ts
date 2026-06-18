@@ -388,7 +388,8 @@ addConnectionOptions(program.command('exec'))
                     onStdout: (c) => process.stdout.write(c),
                     onStderr: (c) => process.stderr.write(c),
                 })
-                process.exitCode = r.code // 远程退出码透传
+                // 远程退出码透传；被信号终止时 code 为 -1，归一为 1（process.exitCode=-1 会被截成 255，误导脚本）
+                process.exitCode = r.code >= 0 ? r.code : 1
                 return
             }
             const result = await runExec(command, buildBase(options))
@@ -425,6 +426,7 @@ addConnectionOptions(program.command('logs'))
                     lines,
                     grep,
                     onLine: (line) => process.stdout.write(line + '\n'),
+                    onStderr: (c) => process.stderr.write(c), // 透传 tail 错误（如路径不存在），不静默失败
                 })
                 if (!r.ok) process.exitCode = r.code > 0 ? r.code : 1
             } catch (e) {
