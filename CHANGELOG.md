@@ -1,3 +1,28 @@
+## v1.3.0
+
+[compare changes](https://github.com/x-wink/wink-sftp/compare/v1.2.0...v1.3.0)
+
+### 🚀 Enhancements
+
+- **config:** Zod 校验 + JSON/YAML 双格式配置加载 ([0039e42](https://github.com/x-wink/wink-sftp/commit/0039e42))
+- **config:** 支持 ${ENV_VAR} secrets 引用与 .env 注入 ([a9a76e0](https://github.com/x-wink/wink-sftp/commit/a9a76e0))
+- **config:** 多环境配置 --env 与深合并 ([c05052e](https://github.com/x-wink/wink-sftp/commit/c05052e))
+- **scanner:** 支持 .winksftpignore（gitignore 风格 glob 忽略） ([941e2a9](https://github.com/x-wink/wink-sftp/commit/941e2a9))
+- **deploy:** 增量传输（size+mtime 比对） ([17faab2](https://github.com/x-wink/wink-sftp/commit/17faab2))
+- **cli:** 新增 pull 下载与 ls 远程浏览子命令 ([063dd4d](https://github.com/x-wink/wink-sftp/commit/063dd4d))
+
+### 🩹 Fixes
+
+- 处理代码审查发现并统一配置深度合并 ([33c0450](https://github.com/x-wink/wink-sftp/commit/33c0450))
+
+### 📖 Documentation
+
+- 同步 v1.3 提效能力文档 ([733792d](https://github.com/x-wink/wink-sftp/commit/733792d))
+
+### ❤️ Contributors
+
+- Xwink <1041367524@qq.com>
+
 ## v1.2.0
 
 [compare changes](https://github.com/x-wink/wink-sftp/compare/v1.1.0...v1.2.0)
