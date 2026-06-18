@@ -41,7 +41,14 @@ export interface RunOption {
     audit?: boolean
     /** 审计日志文件路径（默认 `~/.wink-sftp/audit.log`）。 */
     auditLog?: string
+    /** 选择的环境名（多环境配置），对应配置文件 `environments` 下的键。 */
+    env?: string
+    /** 多环境覆盖表：环境名 → 覆盖配置（深合并到基础配置之上）。 */
+    environments?: Record<string, EnvOverride>
 }
+
+/** 多环境覆盖：环境名下可覆盖的配置子集（不含 `env`/`environments`/`config` 等调用级字段）。 */
+export type EnvOverride = Omit<RunOption, 'env' | 'environments' | 'config'>
 
 export interface ResolvedConfig {
     connect: ConnectConfig

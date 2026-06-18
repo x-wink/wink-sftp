@@ -38,7 +38,8 @@ const sftpOptionsSchema = z.object({
     retries: z.number().optional(),
 })
 
-export const configSchema = z.object({
+/** 基础配置字段（也是每个环境覆盖项可包含的字段）。 */
+const baseShape = {
     connect: connectSchema.optional(),
     local: z.string().optional(),
     remote: z.string().optional(),
@@ -48,6 +49,12 @@ export const configSchema = z.object({
     dryRun: z.boolean().optional(),
     audit: z.boolean().optional(),
     auditLog: z.string().optional(),
+}
+
+export const configSchema = z.object({
+    ...baseShape,
+    // 多环境：environments.<name> 为覆盖项，--env <name> 选中后深合并到基础配置之上
+    environments: z.record(z.string(), z.object(baseShape)).optional(),
 })
 
 /** 把 zod 校验问题列表压成一行可读信息（`字段路径: 原因`）。 */
@@ -150,6 +157,39 @@ export const loadConfigFile = (configPath: string): RunOption => {
     return parsed.data as RunOption
 }
 
+/** 判断是否为可深合并的普通对象（排除数组与 null）。 */
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+    Boolean(v) && typeof v === 'object' && !Array.isArray(v)
+
+/**
+ * 深合并 `override` 到 `base` 之上（返回新对象）：两侧均为普通对象的键递归合并，
+ * 否则 `override` 覆盖（数组与标量整体替换）。用于把所选环境覆盖叠加到基础配置。
+ */
+export const deepMerge = <T extends Record<string, unknown>>(base: T, override: Record<string, unknown>): T => {
+    const out: Record<string, unknown> = { ...base }
+    for (const [k, v] of Object.entries(override)) {
+        if (v === undefined) continue
+        out[k] = isPlainObject(v) && isPlainObject(out[k]) ? deepMerge(out[k] as Record<string, unknown>, v) : v
+    }
+    return out as T
+}
+
+/**
+ * 按 `options.env` 选中的环境名，把 `raw.environments[name]` 深合并到基础配置之上。
+ * 未选环境时原样返回；选了但不存在该环境抛 {@link ConfigError}。
+ */
+const applyEnv = (raw: RunOption, selected?: string): RunOption => {
+    if (!selected) return raw
+    const override = raw.environments?.[selected]
+    if (!override) {
+        const available = Object.keys(raw.environments ?? {})
+        throw new ConfigError(
+            `未找到环境配置：${selected}（可用环境：${available.length ? available.join('、') : '无'}）`
+        )
+    }
+    return deepMerge(raw as Record<string, unknown>, override as Record<string, unknown>) as RunOption
+}
+
 /** 合并配置文件 / CLI 选项并校验，返回归一化配置。校验失败抛 {@link ConfigError}。 */
 export const resolveConfig = (options: RunOption = {}): ResolvedConfig => {
     const { config = false } = options
@@ -157,7 +197,8 @@ export const resolveConfig = (options: RunOption = {}): ResolvedConfig => {
     const cliDebug = options.debug ?? false
     const cliJson = options.json ?? false
     const cliDryRun = options.dryRun ?? false
-    const raw: RunOption = config ? loadConfigFile(config) : options
+    // env 同为调用级开关：选中的环境名来自 options（CLI/编程式），环境表来自加载后的配置
+    const raw: RunOption = applyEnv(config ? loadConfigFile(config) : options, options.env)
     const connect = raw.connect ?? {}
     // 密码登录或密钥登录二选一：privateKey / agent 任一存在即可，允许密码留空
     const hasAuth = Boolean(connect.password) || Boolean(connect.privateKey) || Boolean(connect.agent)

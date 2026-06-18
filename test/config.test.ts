@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { loadConfigFile, resolveConfig, interpolateSecrets, parseDotEnv } from '../src/config'
+import { loadConfigFile, resolveConfig, interpolateSecrets, parseDotEnv, deepMerge } from '../src/config'
 
 let dir: string
 
@@ -132,6 +132,49 @@ describe('interpolateSecrets', () => {
     it('非字符串值原样保留', () => {
         const { value } = interpolateSecrets({ port: 22, flag: true, nil: null }, env)
         expect(value).toEqual({ port: 22, flag: true, nil: null })
+    })
+})
+
+describe('deepMerge', () => {
+    it('普通对象递归合并、标量与数组整体替换', () => {
+        const merged = deepMerge(
+            { a: 1, nested: { x: 1, y: 2 }, list: [1, 2] },
+            { a: 9, nested: { y: 20, z: 30 }, list: [3] }
+        )
+        expect(merged).toEqual({ a: 9, nested: { x: 1, y: 20, z: 30 }, list: [3] })
+    })
+
+    it('override 中 undefined 不覆盖 base', () => {
+        expect(deepMerge({ a: 1 }, { a: undefined })).toEqual({ a: 1 })
+    })
+})
+
+describe('多环境 --env', () => {
+    const multiEnv = {
+        ...validConfig,
+        connect: { host: 'base', port: 22, username: 'u', password: 'pw' },
+        environments: {
+            prod: { connect: { host: 'prod-host' }, remote: '/prod' },
+            dev: { connect: { host: 'dev-host' } },
+        },
+    }
+
+    it('选中环境深合并到基础配置之上', () => {
+        const p = write('sftp.json', JSON.stringify(multiEnv))
+        const r = resolveConfig({ config: p, env: 'prod' })
+        expect(r.connect.host).toBe('prod-host')
+        expect(r.connect.username).toBe('u') // 基础配置保留
+        expect(r.remote).toBe('/prod')
+    })
+
+    it('未选环境时使用基础配置', () => {
+        const p = write('sftp.json', JSON.stringify(multiEnv))
+        expect(resolveConfig({ config: p }).connect.host).toBe('base')
+    })
+
+    it('选了不存在的环境抛 ConfigError 并列出可用环境', () => {
+        const p = write('sftp.json', JSON.stringify(multiEnv))
+        expect(() => resolveConfig({ config: p, env: 'staging' })).toThrow(/未找到环境配置.*prod.*dev/s)
     })
 })
 
