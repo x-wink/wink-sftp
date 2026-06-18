@@ -436,21 +436,14 @@ addConnectionOptions(program.command('service'))
     .option('--manager <manager>', `服务管理器：${SERVICE_MANAGERS.join('|')}（默认 systemd）`, 'systemd')
     .option('--yes', '确认执行写动作（start/stop/restart/reload）')
     .action(async (svcName: string, action: string, options: Record<string, unknown>) => {
+        // 动作 / 管理器合法性校验收口在 service() 核心层（护栏进 core）；CLI 仅做映射
         await execute(
             Boolean(options.json),
-            () => {
-                if (!SERVICE_ACTIONS.includes(action as ServiceAction)) {
-                    throw new ConfigError(`未知服务动作：${action}（支持 ${SERVICE_ACTIONS.join('/')}）`)
-                }
-                const manager = options.manager as string
-                if (!SERVICE_MANAGERS.includes(manager as ServiceManager)) {
-                    throw new ConfigError(`未知服务管理器：${manager}（支持 ${SERVICE_MANAGERS.join('/')}）`)
-                }
-                return service(svcName, action as ServiceAction, buildBase(options), {
-                    manager: manager as ServiceManager,
+            () =>
+                service(svcName, action as ServiceAction, buildBase(options), {
+                    manager: options.manager as ServiceManager,
                     yes: Boolean(options.yes),
-                })
-            },
+                }),
             renderService,
             4
         )

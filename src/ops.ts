@@ -1,10 +1,29 @@
 import { withSession } from './session'
+import type { SshSession } from './session'
 import { resolveConfig } from './config'
 import { Logger } from './logger'
 import { recordAudit } from './audit'
 import { shellQuote } from './exec'
 import { ConfigError, RemoteCommandError } from './errors'
 import type { RunOption } from './core'
+
+/**
+ * 在会话上执行命令，把**退出码非零也作为结构化结果返回（不抛）**——运维/诊断原语共用底座：
+ * 「命令失败」本身就是要呈现给调用方的事实。仅连接失败 / 命令无法启动（{@link RemoteCommandError}
+ * 不带 `result`）等真正异常才 reject。`runExec`/`ps`/`service` 均以此统一处理退出码语义。
+ */
+const execStructured = async (
+    session: SshSession,
+    command: string
+): Promise<{ stdout: string; stderr: string; code: number }> => {
+    try {
+        const r = await session.exec(command)
+        return { stdout: r.stdout, stderr: r.stderr, code: r.code }
+    } catch (e) {
+        if (e instanceof RemoteCommandError && e.result) return e.result
+        throw e // 无法启动（如命令不存在于 shell 之外）等仍按异常上抛
+    }
+}
 
 /** `exec` 远程执行结果：退出码非零也作为结构化结果返回（不抛），便于 agent 诊断。 */
 export interface ExecRunResult {
@@ -30,15 +49,8 @@ export const runExec = async (command: string, options?: RunOption): Promise<Exe
     const config = resolveConfig(options, { requireLocal: false, requireRemote: false })
     const logger = new Logger({ debug: config.debug, json: config.json })
     return withSession(config.connect, logger, async (session) => {
-        try {
-            const r = await session.exec(command)
-            return { ok: true, command, stdout: r.stdout, stderr: r.stderr, code: r.code }
-        } catch (e) {
-            if (e instanceof RemoteCommandError && e.result) {
-                return { ok: false, command, stdout: e.result.stdout, stderr: e.result.stderr, code: e.result.code }
-            }
-            throw e // 无法启动（如命令不存在于 shell 之外）等仍按异常上抛
-        }
+        const r = await execStructured(session, command)
+        return { ok: r.code === 0, command, stdout: r.stdout, stderr: r.stderr, code: r.code }
     })
 }
 
@@ -234,11 +246,13 @@ export const parsePs = (text: string): ProcessInfo[] => {
 export const ps = async (options?: RunOption, { grep }: { grep?: string } = {}): Promise<PsResult> => {
     const config = resolveConfig(options, { requireLocal: false, requireRemote: false })
     const logger = new Logger({ debug: config.debug, json: config.json })
-    // `-A -o` 在 GNU(Linux) 与 BSD(macOS) ps 上语义一致（裸 `-e` 在 macOS 含义不同，不可用）
+    // `-A -o` 在 GNU(Linux) 与 BSD(macOS) ps 上语义一致（裸 `-e` 在 macOS 含义不同，不可用）；
+    // `LC_ALL=C` 固定 C 区域设置，强制 %CPU/%MEM 用点号小数——否则 de_DE 等区域输出逗号小数会
+    // 让 parsePs 的 `[\d.]+` 列整行不匹配、静默丢光所有进程。
     return withSession(config.connect, logger, async (session) => {
-        const r = await session.exec('ps -A -o pid,ppid,user,pcpu,pmem,rss,args')
+        const r = await execStructured(session, 'LC_ALL=C ps -A -o pid,ppid,user,pcpu,pmem,rss,args')
         const all = parsePs(r.stdout)
-        return { ok: true, processes: grep ? all.filter((p) => p.command.includes(grep)) : all }
+        return { ok: r.code === 0, processes: grep ? all.filter((p) => p.command.includes(grep)) : all }
     })
 }
 
@@ -291,6 +305,9 @@ export const buildServiceCommand = (manager: ServiceManager, action: ServiceActi
             if (action === 'status') return `docker ps --filter name=${n}`
             if (action === 'reload') throw new ConfigError('docker 不支持 reload 动作（用 restart）')
             return `docker ${action} ${n}`
+        default:
+            // 类型上不可达（manager 为 ServiceManager 联合）；防御 lib 调用方强转非法字符串
+            throw new ConfigError(`未知服务管理器：${String(manager)}`)
     }
 }
 
@@ -308,6 +325,13 @@ export const service = async (
     options?: RunOption,
     { manager = 'systemd', yes = false }: { manager?: ServiceManager; yes?: boolean } = {}
 ): Promise<ServiceResult> => {
+    // 校验收口在核心层（护栏进 core）：CLI 与 lib 编程式调用方都受益，不在 CLI 层重复
+    if (!SERVICE_ACTIONS.includes(action)) {
+        throw new ConfigError(`未知服务动作：${action}（支持 ${SERVICE_ACTIONS.join('/')}）`)
+    }
+    if (!SERVICE_MANAGERS.includes(manager)) {
+        throw new ConfigError(`未知服务管理器：${manager}（支持 ${SERVICE_MANAGERS.join('/')}）`)
+    }
     const write = isWriteAction(action)
     if (write && !yes) {
         throw new ConfigError(`服务写操作 ${action} 需 --yes 确认（只读 status 无需）`)
@@ -317,13 +341,7 @@ export const service = async (
     const config = resolveConfig(options, { requireLocal: false, requireRemote: false })
     const logger = new Logger({ debug: config.debug, json: config.json })
     return withSession(config.connect, logger, async (session) => {
-        let r: { stdout: string; stderr: string; code: number }
-        try {
-            r = await session.exec(command)
-        } catch (e) {
-            if (e instanceof RemoteCommandError && e.result) r = e.result
-            else throw e // 连接/无法启动等仍上抛
-        }
+        const r = await execStructured(session, command)
         const ok = r.code === 0
         if (write) recordAudit(config, logger, `service:${action}`, ok, { service: name, manager, command })
         return { ok, service: name, action, manager, command, stdout: r.stdout, stderr: r.stderr, code: r.code }

@@ -138,13 +138,13 @@ describe('ps', () => {
         '  900     1 node 12.0  5.0 88000 node /app/server.js',
     ].join('\n')
 
-    it('采集 ps -A 并结构化', async () => {
+    it('采集 ps -A 并结构化（命令固定 LC_ALL=C 防区域小数）', async () => {
         h.state.responses = [{ match: 'ps -A', stdout: PS_OUT }]
         const r = await ps({ connect: conn })
         expect(r.ok).toBe(true)
         expect(r.processes).toHaveLength(2)
         expect(r.processes[1]).toMatchObject({ pid: 900, user: 'node', command: 'node /app/server.js' })
-        expect(h.state.execs[0]).toBe('ps -A -o pid,ppid,user,pcpu,pmem,rss,args')
+        expect(h.state.execs[0]).toBe('LC_ALL=C ps -A -o pid,ppid,user,pcpu,pmem,rss,args')
     })
 
     it('grep 在客户端按命令行子串过滤', async () => {
@@ -152,6 +152,13 @@ describe('ps', () => {
         const r = await ps({ connect: conn }, { grep: 'server.js' })
         expect(r.processes).toHaveLength(1)
         expect(r.processes[0].pid).toBe(900)
+    })
+
+    it('ps 退出码非零：ok=false 但不抛（结构化结果，与 runExec 一致）', async () => {
+        h.state.responses = [{ match: 'ps -A', stdout: '', code: 1 }]
+        const r = await ps({ connect: conn })
+        expect(r.ok).toBe(false)
+        expect(r.processes).toEqual([])
     })
 })
 
@@ -187,6 +194,17 @@ describe('service', () => {
         await expect(
             service('redis', 'reload', { connect: conn, audit: false }, { manager: 'docker', yes: true })
         ).rejects.toThrow()
+        expect(h.state.execs).toHaveLength(0)
+    })
+
+    it('非法动作 / 管理器：核心层校验抛错且不建立连接（护栏进 core）', async () => {
+        // 模拟 lib 调用方强转非法字符串
+        await expect(
+            service('nginx', 'frobnicate' as never, { connect: conn, audit: false }, { yes: true })
+        ).rejects.toThrow(/未知服务动作/)
+        await expect(
+            service('nginx', 'status', { connect: conn, audit: false }, { manager: 'k8s' as never })
+        ).rejects.toThrow(/未知服务管理器/)
         expect(h.state.execs).toHaveLength(0)
     })
 })

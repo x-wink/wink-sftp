@@ -97,6 +97,9 @@ describe('buildServiceCommand', () => {
         expect(buildServiceCommand('docker', 'restart', 'redis')).toBe("docker restart 'redis'")
         expect(() => buildServiceCommand('docker', 'reload', 'redis')).toThrow()
     })
+    it('未知管理器（强转）：default 分支抛错', () => {
+        expect(() => buildServiceCommand('k8s' as never, 'status', 'x')).toThrow(/未知服务管理器/)
+    })
 })
 
 describe('isWriteAction', () => {
