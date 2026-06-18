@@ -14,8 +14,12 @@ import type { RunOption, StackValue, StackSpec } from './core'
  * 设计与 `service` 一致——recipe 用**纯函数**（检测命令字符串 + `parse` 解析 + `converge` 规划）描述，
  * 编排器只负责「执行检测 → 算收敛步骤 → 预演或执行」，便于 fixture 单测、e2e 只验证编排/连通。
  *
- * 本批交付语言运行时 + docker 四个 recipe（node/jdk/python/docker）；nginx/redis/mysql 等需守护式
- * `configure` 的 recipe 复用 {@link guard}，留待下批。边界：面向固定栈的策划式 recipes，非通用 CM 引擎。
+ * 已交付 recipe：语言运行时 + docker（node/jdk/python/docker）+ nginx/redis/mysql（install + verify，
+ * redis/mysql 支持 `mode: docker|native`、关键参数 maxmemory/rootPassword 安装时设）。守护式写配置文件
+ * （复用 {@link guard}）留待下批。边界：面向固定栈的策划式 recipes（Ubuntu/Debian 优先），非通用 CM 引擎。
+ *
+ * 安全：含 secret 的步骤（如 mysql rootPassword）的 {@link PlanStep.display} 为脱敏版，编排器对外
+ * （--json / 审计）只暴露 display，绝不泄漏明文。原生包安装需以 root（或免密 sudo）用户连接。
  */
 
 /** 组件当前安装状态（由 recipe 的 `parse` 从检测输出归一化）。 */
@@ -26,10 +30,16 @@ export interface DetectState {
     version: string | null
 }
 
+/** 组件的附加选项（stack 对象形态的非 version 字段，如 redis/mysql 的 `mode`/`maxmemory`/`rootPassword`）。 */
+export type ComponentOptions = Record<string, unknown>
+
 /** 一个收敛步骤：人类描述 + 实际远程命令。 */
 export interface PlanStep {
     description: string
+    /** 实际执行的远程命令。 */
     command: string
+    /** 对外展示/记录用命令（含 secret 时为脱敏版）；缺省同 {@link command}。绝不把含明文 secret 的 command 暴露给 --json/审计。 */
+    display?: string
 }
 
 /** 已执行步骤的结果：在 {@link PlanStep} 基础上带执行产物（退出码非零即 `ok=false`）。 */
@@ -57,12 +67,12 @@ export interface ConvergePlan {
 export interface Recipe {
     /** 组件名（stack 键）。 */
     component: string
-    /** 检测命令（版本无关，检测当前默认版本）。 */
-    detect: string
+    /** 按组件选项产出检测命令（多数组件版本/选项无关；redis/mysql 据 `mode` 返回 native/docker 检测）。 */
+    detect(options: ComponentOptions): string
     /** 解析检测输出为安装状态。 */
     parse(output: string): DetectState
-    /** 给定目标版本（`normalizeDesired` 归一化后的字符串）与检测状态产出收敛步骤。 */
-    converge(desired: string, state: DetectState): ConvergePlan
+    /** 给定目标版本（`normalizeDesired` 归一化）、检测状态与组件选项产出收敛步骤（已满足则空步骤）。 */
+    converge(desired: string, state: DetectState, options: ComponentOptions): ConvergePlan
 }
 
 /**
@@ -110,13 +120,17 @@ const parseVersion = (output: string, re: RegExp): DetectState => {
     return m ? { installed: true, version: m[1] } : { installed: false, version: null }
 }
 
+/** 把步骤映射为对外可暴露形态：只取脱敏 {@link PlanStep.display}（缺省 command），不泄漏明文 secret。 */
+const toSafeStep = (s: PlanStep): PlanStep => ({ description: s.description, command: s.display ?? s.command })
+
 /** nvm 安装脚本（固定版本，避免随上游 HEAD 漂移）。 */
 const NVM_INSTALLER = 'https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh'
 
 /** Node.js（经 nvm 版本管理）。 */
 const nodejs: Recipe = {
     component: 'nodejs',
-    detect: 'export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; node --version 2>/dev/null || true',
+    detect: () =>
+        'export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; node --version 2>/dev/null || true',
     parse: (out) => parseVersion(out, /v(\d+\.\d+\.\d+)/),
     converge: (desired, state) => {
         if (state.installed && versionSatisfies(desired, state.version)) return { satisfied: true, steps: [] }
@@ -141,7 +155,8 @@ const nodejs: Recipe = {
 const jdk: Recipe = {
     component: 'jdk',
     // 取含 version 的那一行（用 grep 过滤掉 `Picked up JAVA_TOOL_OPTIONS` 等噪声首行）
-    detect: 'export SDKMAN_DIR="${SDKMAN_DIR:-$HOME/.sdkman}"; [ -s "$SDKMAN_DIR/bin/sdkman-init.sh" ] && . "$SDKMAN_DIR/bin/sdkman-init.sh"; java -version 2>&1 | grep -i version | head -n 1 || true',
+    detect: () =>
+        'export SDKMAN_DIR="${SDKMAN_DIR:-$HOME/.sdkman}"; [ -s "$SDKMAN_DIR/bin/sdkman-init.sh" ] && . "$SDKMAN_DIR/bin/sdkman-init.sh"; java -version 2>&1 | grep -i version | head -n 1 || true',
     // java -version 形如 `openjdk version "17.0.9" 2023-...` 或老式 `java version "1.8.0_292"`。
     // 归一：旧 1.X 编号的 X 才是真实大版本（`1.8.0_292` → `8.0.292`），下划线补丁位转点——
     // 否则 `jdk: '8'` 永远命中不了已装的 Java 8（'8' 比到首段 '1'），破坏幂等。
@@ -174,7 +189,8 @@ const jdk: Recipe = {
 /** Python（经 pyenv 版本管理；version 建议用完整补丁号，如 `3.11.9`）。 */
 const python: Recipe = {
     component: 'python',
-    detect: 'export PYENV_ROOT="${PYENV_ROOT:-$HOME/.pyenv}"; export PATH="$PYENV_ROOT/bin:$PATH"; command -v pyenv >/dev/null 2>&1 && eval "$(pyenv init - 2>/dev/null)"; python --version 2>&1 || true',
+    detect: () =>
+        'export PYENV_ROOT="${PYENV_ROOT:-$HOME/.pyenv}"; export PATH="$PYENV_ROOT/bin:$PATH"; command -v pyenv >/dev/null 2>&1 && eval "$(pyenv init - 2>/dev/null)"; python --version 2>&1 || true',
     parse: (out) => parseVersion(out, /Python (\d+\.\d+\.\d+)/),
     converge: (desired, state) => {
         if (state.installed && versionSatisfies(desired, state.version)) return { satisfied: true, steps: [] }
@@ -198,7 +214,7 @@ const python: Recipe = {
 /** Docker（官方安装脚本；布尔开关组件，只判是否已安装、不比版本）。 */
 const docker: Recipe = {
     component: 'docker',
-    detect: 'docker --version 2>/dev/null || true',
+    detect: () => 'docker --version 2>/dev/null || true',
     parse: (out) => parseVersion(out, /Docker version (\d+\.\d+\.\d+)/),
     converge: (_desired, state) => {
         if (state.installed) return { satisfied: true, steps: [] }
@@ -214,8 +230,127 @@ const docker: Recipe = {
     },
 }
 
-/** 受支持的组件 recipe 注册表（本批：语言运行时 + docker）。 */
-export const RECIPES: Record<string, Recipe> = { nodejs, jdk, python, docker }
+/** nginx（原生 apt 安装；版本由发行版决定，已装即满足）。 */
+const nginx: Recipe = {
+    component: 'nginx',
+    detect: () => 'nginx -v 2>&1 || true', // "nginx version: nginx/1.24.0" 走 stderr
+    parse: (out) => parseVersion(out, /nginx\/(\d+\.\d+\.\d+)/),
+    converge: (_desired, state) => {
+        if (state.installed) return { satisfied: true, steps: [] }
+        return {
+            satisfied: false,
+            steps: [
+                { description: '安装 nginx（apt）', command: 'apt-get update && apt-get install -y nginx' },
+                { description: '校验 nginx 配置（nginx -t）', command: 'nginx -t' },
+            ],
+        }
+    },
+}
+
+/** redis 固定容器名（docker 模式）。 */
+const REDIS_CONTAINER = 'wink-redis'
+/** redis（mode: native(默认) | docker；docker 按镜像 tag 比版本、native 已装即满足；可选 maxmemory）。 */
+const redis: Recipe = {
+    component: 'redis',
+    detect: (o = {}) =>
+        o.mode === 'docker'
+            ? `docker exec ${REDIS_CONTAINER} redis-server --version 2>/dev/null || true`
+            : 'redis-server --version 2>/dev/null || true',
+    parse: (out) => parseVersion(out, /v=(\d+\.\d+\.\d+)/), // "Redis server v=7.0.11 ..."
+    converge: (desired, state, o = {}) => {
+        const isDocker = o.mode === 'docker'
+        if (isDocker ? versionSatisfies(desired, state.version) : state.installed) {
+            return { satisfied: true, steps: [] }
+        }
+        const maxmemory = o.maxmemory !== undefined ? String(o.maxmemory) : null
+        if (isDocker) {
+            const mm = maxmemory ? ` --maxmemory ${shellQuote(maxmemory)}` : ''
+            return {
+                satisfied: false,
+                steps: [
+                    {
+                        description: `启动 redis:${desired} 容器（${REDIS_CONTAINER}）`,
+                        command: `docker run -d --name ${REDIS_CONTAINER} --restart unless-stopped -p 6379:6379 redis:${shellQuote(desired)}${mm}`,
+                    },
+                    {
+                        description: '校验 redis 可达（redis-cli ping）',
+                        command: `docker exec ${REDIS_CONTAINER} redis-cli ping`,
+                    },
+                ],
+            }
+        }
+        const steps: PlanStep[] = [
+            { description: '安装 redis（apt）', command: 'apt-get update && apt-get install -y redis-server' },
+        ]
+        if (maxmemory) {
+            steps.push({
+                description: `设置 maxmemory=${maxmemory}（运行时；持久化待守护式配置批）`,
+                command: `redis-cli config set maxmemory ${shellQuote(maxmemory)}`,
+            })
+        }
+        steps.push({ description: '校验 redis 可达（redis-cli ping）', command: 'redis-cli ping' })
+        return { satisfied: false, steps }
+    },
+}
+
+/** mysql 固定容器名（docker 模式）。 */
+const MYSQL_CONTAINER = 'wink-mysql'
+/** mysql（mode: native(默认) | docker；rootPassword 经 ${ENV_VAR} 引用，docker 模式必填；含 secret 步骤脱敏）。 */
+const mysql: Recipe = {
+    component: 'mysql',
+    detect: (o = {}) =>
+        o.mode === 'docker'
+            ? `docker exec ${MYSQL_CONTAINER} mysqld --version 2>/dev/null || true`
+            : 'mysqld --version 2>/dev/null || mysql --version 2>/dev/null || true',
+    parse: (out) => parseVersion(out, /Ver (\d+\.\d+\.\d+)/), // "mysqld  Ver 8.0.35 for Linux ..."
+    converge: (desired, state, o = {}) => {
+        const isDocker = o.mode === 'docker'
+        if (isDocker ? versionSatisfies(desired, state.version) : state.installed) {
+            return { satisfied: true, steps: [] }
+        }
+        const rootPassword = o.rootPassword !== undefined ? String(o.rootPassword) : null
+        if (isDocker) {
+            if (!rootPassword) {
+                throw new ConfigError('mysql（docker 模式）需 rootPassword（建议用 ${ENV_VAR} 引用，不落明文）')
+            }
+            const run = (pwd: string): string =>
+                `docker run -d --name ${MYSQL_CONTAINER} --restart unless-stopped -p 3306:3306 -e MYSQL_ROOT_PASSWORD=${pwd} mysql:${shellQuote(desired)}`
+            return {
+                satisfied: false,
+                steps: [
+                    {
+                        description: `启动 mysql:${desired} 容器（${MYSQL_CONTAINER}）`,
+                        command: run(shellQuote(rootPassword)),
+                        display: run(shellQuote('***')), // 脱敏：不把 root 密码暴露给 --json/审计
+                    },
+                    {
+                        description: '校验 mysql 可达（mysqladmin ping）',
+                        command: `docker exec ${MYSQL_CONTAINER} mysqladmin ping`,
+                    },
+                ],
+            }
+        }
+        const steps: PlanStep[] = [
+            {
+                description: '安装 mysql（apt，非交互）',
+                command:
+                    'DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y mysql-server',
+            },
+        ]
+        if (rootPassword) {
+            steps.push({
+                description: '设置 root 密码',
+                command: `mysqladmin -u root password ${shellQuote(rootPassword)}`,
+                display: `mysqladmin -u root password ${shellQuote('***')}`, // 脱敏
+            })
+        }
+        steps.push({ description: '校验 mysql 可达（mysqladmin ping）', command: 'mysqladmin ping' })
+        return { satisfied: false, steps }
+    },
+}
+
+/** 受支持的组件 recipe 注册表（语言运行时 + docker + nginx/redis/mysql）。 */
+export const RECIPES: Record<string, Recipe> = { nodejs, jdk, python, docker, nginx, redis, mysql }
 
 /** 单个组件的收敛结果。 */
 export interface ComponentResult {
@@ -245,18 +380,25 @@ export interface ProvisionResult {
     components: ComponentResult[]
 }
 
-/** 从 stack 选出要处理的组件（可用 `only` 限定子集）；校验组件均受支持、声明值合法。 */
-const selectComponents = (stack: StackSpec, only?: string[]): { component: string; desired: string }[] => {
+/** 从 stack 选出要处理的组件（可用 `only` 限定子集）；校验组件均受支持、声明值合法，并带出对象形态的附加选项。 */
+const selectComponents = (
+    stack: StackSpec,
+    only?: string[]
+): { component: string; desired: string; options: ComponentOptions }[] => {
     const names = only && only.length ? only : Object.keys(stack)
-    const out: { component: string; desired: string }[] = []
+    const out: { component: string; desired: string; options: ComponentOptions }[] = []
     for (const name of names) {
         if (!(name in stack)) throw new ConfigError(`stack 中未声明组件：${name}`)
         if (!RECIPES[name]) {
-            throw new ConfigError(`不支持的组件：${name}（本批支持 ${Object.keys(RECIPES).join('/')}）`)
+            throw new ConfigError(`不支持的组件：${name}（支持 ${Object.keys(RECIPES).join('/')}）`)
         }
-        const desired = normalizeDesired(name, stack[name])
+        const value = stack[name]
+        const desired = normalizeDesired(name, value)
         if (desired === null) continue // 显式关闭（false）：跳过
-        out.push({ component: name, desired })
+        // 对象形态的非 version 字段作为附加选项（如 redis/mysql 的 mode/maxmemory/rootPassword）
+        const options: ComponentOptions =
+            value && typeof value === 'object' && !Array.isArray(value) ? (value as ComponentOptions) : {}
+        out.push({ component: name, desired, options })
     }
     return out
 }
@@ -266,17 +408,19 @@ const provisionOne = async (
     session: SshSession,
     recipe: Recipe,
     desired: string,
+    options: ComponentOptions,
     dryRun: boolean
 ): Promise<ComponentResult> => {
-    const probe = await execStructured(session, recipe.detect)
+    const probe = await execStructured(session, recipe.detect(options))
     const detected = recipe.parse(probe.stdout)
-    const plan = recipe.converge(desired, detected)
+    const plan = recipe.converge(desired, detected, options)
     const base: ComponentResult = {
         component: recipe.component,
         desired,
         detected,
         satisfied: plan.satisfied,
-        planned: plan.steps,
+        // 对外只暴露脱敏 display（缺省 command）：含 secret 的步骤绝不把明文 command 放进结果
+        planned: plan.steps.map(toSafeStep),
         executed: [],
         ok: true,
     }
@@ -284,11 +428,11 @@ const provisionOne = async (
     const executed: ComponentResult['executed'] = []
     let ok = true
     for (const step of plan.steps) {
-        // 顺序执行：后续步骤依赖前序（如先装版本管理器再装运行时）
+        // 顺序执行：后续步骤依赖前序（如先装再校验）；执行真实 command，但只记录脱敏 display
         // eslint-disable-next-line no-await-in-loop
         const r = await execStructured(session, step.command)
         const stepOk = r.code === 0
-        executed.push({ description: step.description, command: step.command, ...r, ok: stepOk })
+        executed.push({ description: step.description, command: step.display ?? step.command, ...r, ok: stepOk })
         if (!stepOk) {
             ok = false
             break // 步骤失败则停止该组件，避免在半成品上继续
@@ -322,10 +466,11 @@ export const provision = async (
     const logger = new Logger({ debug: config.debug, json: config.json })
     return withSession(config.connect, logger, async (session) => {
         const components: ComponentResult[] = []
-        for (const { component, desired } of selected) {
+        for (const sel of selected) {
             // 顺序处理组件：实跑步骤多为网络安装，避免并发打满 SSH 会话；且日志可读
             // eslint-disable-next-line no-await-in-loop
-            components.push(await provisionOne(session, RECIPES[component], desired, config.dryRun))
+            const r = await provisionOne(session, RECIPES[sel.component], sel.desired, sel.options, config.dryRun)
+            components.push(r)
         }
         const ok = components.every((c) => c.ok)
         if (!config.dryRun) {

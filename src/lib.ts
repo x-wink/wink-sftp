@@ -50,6 +50,7 @@ export type {
     DetectState,
     PlanStep,
     ConvergePlan,
+    ComponentOptions,
 } from './provision'
 export { resolveConfig, loadConfigFile } from './config'
 export { execCommand, shellQuote } from './exec'

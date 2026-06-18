@@ -118,17 +118,17 @@ src/
 
 ## 七、命令面
 
-| 子命令            | 读/写 | 说明                                                                                |
-| ----------------- | ----- | ----------------------------------------------------------------------------------- |
-| `provision`       | 写    | 按 stack 定义收敛服务器栈（已交付语言运行时 + Docker 批；写须 `--dry-run`/`--yes`） |
-| `deploy` / `push` | 写    | 部署 / 上传（无子命令时默认 `deploy`，向后兼容）                                    |
-| `pull` / `get`    | 写    | 下载（fastGet）                                                                     |
-| `ls` / `browse`   | 读    | 远程文件浏览                                                                        |
-| `exec`            | 读/写 | 远程执行（run / stream）                                                            |
-| `status`          | 读    | 资源/健康快照                                                                       |
-| `logs`            | 读    | 日志流式 tail + grep                                                                |
-| `ps` / `service`  | 写    | 进程/服务管理                                                                       |
-| `edit`            | 写    | 守护式远程配置编辑                                                                  |
+| 子命令            | 读/写 | 说明                                                                                                          |
+| ----------------- | ----- | ------------------------------------------------------------------------------------------------------------- |
+| `provision`       | 写    | 按 stack 定义收敛服务器栈（已交付全组件 install+verify；守护式 configure 精修待做；写须 `--dry-run`/`--yes`） |
+| `deploy` / `push` | 写    | 部署 / 上传（无子命令时默认 `deploy`，向后兼容）                                                              |
+| `pull` / `get`    | 写    | 下载（fastGet）                                                                                               |
+| `ls` / `browse`   | 读    | 远程文件浏览                                                                                                  |
+| `exec`            | 读/写 | 远程执行（run / stream）                                                                                      |
+| `status`          | 读    | 资源/健康快照                                                                                                 |
+| `logs`            | 读    | 日志流式 tail + grep                                                                                          |
+| `ps` / `service`  | 写    | 进程/服务管理                                                                                                 |
+| `edit`            | 写    | 守护式远程配置编辑                                                                                            |
 
 **输出纪律**：`--json` 机器输出只走 **stdout**；人类日志/进度/debug 走 **stderr**。保证 `wink-sftp ... --json | jq` 成立，也是 agent 可靠解析的基础。
 
@@ -158,7 +158,7 @@ interface Recipe {
 }
 ```
 
-**已实现形态（语言运行时 + Docker 批）**：为最大化可测性，本批 recipe 以**纯函数**落地为 `detect`（检测命令字符串）+ `parse`（解析输出为 `{installed,version}`）+ `converge`（给定目标版本与检测状态产出幂等步骤，已满足则空步骤）——`install` 即 `converge` 产出的步骤。`configure`/`verify`/`maintain` 随 nginx/redis/mysql 批引入（`configure` 复用守护式 `guard`）。编排器只跑「检测→收敛→预演或执行」，写操作须 `--dry-run` 或 `--yes`。
+**已实现形态（全组件，install + verify）**：为最大化可测性，recipe 以**纯函数**落地为 `detect(options)`（按组件选项产出检测命令，redis/mysql 据 `mode` 返回 native/docker 检测）+ `parse`（解析输出为 `{installed,version}`）+ `converge(desired, state, options)`（产出幂等步骤，已满足则空步骤）——`install` 与 `verify`（`nginx -t` / `redis-cli ping` / `mysqladmin ping`）都是 `converge` 产出的步骤。含 secret 的步骤用 `PlanStep.display` 给脱敏命令，编排器对外（--json/审计）只暴露 display、绝不泄漏明文。`configure`（守护式写配置文件，复用 `guard`）/`maintain` 留作精修批。编排器只跑「检测→收敛→预演或执行」，写操作须 `--dry-run` 或 `--yes`。
 
 **声明式 stack 定义**（跨项目复用的价值所在）：
 

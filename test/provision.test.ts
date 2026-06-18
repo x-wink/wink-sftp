@@ -117,6 +117,70 @@ describe('recipe: docker', () => {
 
 describe('recipe detect 命令稳定（防回归改动）', () => {
     it('docker detect 以 || true 兜底退出码', () => {
-        expect(RECIPES.docker.detect).toBe('docker --version 2>/dev/null || true')
+        expect(RECIPES.docker.detect({})).toBe('docker --version 2>/dev/null || true')
+    })
+})
+
+describe('recipe: nginx（原生，已装即满足）', () => {
+    const r = RECIPES.nginx
+    it('parse 取 nginx/X.Y.Z', () => {
+        expect(r.parse('nginx version: nginx/1.24.0')).toEqual({ installed: true, version: '1.24.0' })
+        expect(r.parse('')).toEqual({ installed: false, version: null })
+    })
+    it('已安装即满足；未安装 → apt 安装 + nginx -t 校验', () => {
+        expect(r.converge('latest', { installed: true, version: '1.24.0' }, {}).satisfied).toBe(true)
+        const plan = r.converge('latest', { installed: false, version: null }, {})
+        expect(plan.steps).toHaveLength(2)
+        expect(plan.steps[0].command).toContain('apt-get install -y nginx')
+        expect(plan.steps[1].command).toBe('nginx -t')
+    })
+})
+
+describe('recipe: redis（docker|native）', () => {
+    const r = RECIPES.redis
+    it('parse 取 Redis server v=X.Y.Z', () => {
+        expect(r.parse('Redis server v=7.0.11 sha=00000000:0')).toEqual({ installed: true, version: '7.0.11' })
+    })
+    it('docker detect 走容器内 redis-server；native 走本机', () => {
+        expect(r.detect({ mode: 'docker' })).toContain('docker exec wink-redis redis-server --version')
+        expect(r.detect({})).toBe('redis-server --version 2>/dev/null || true')
+    })
+    it('docker 模式按版本匹配；未满足 → run 容器（含 maxmemory）+ ping 校验，值经 shellQuote', () => {
+        expect(r.converge('7', { installed: true, version: '7.0.11' }, { mode: 'docker' }).satisfied).toBe(true)
+        const plan = r.converge('7', { installed: false, version: null }, { mode: 'docker', maxmemory: '512mb' })
+        expect(plan.steps[0].command).toContain('docker run -d --name wink-redis')
+        expect(plan.steps[0].command).toContain("redis:'7'") // desired 经 shellQuote（shell 去引号后传 redis:7）
+        expect(plan.steps[0].command).toContain("--maxmemory '512mb'")
+        expect(plan.steps[1].command).toBe('docker exec wink-redis redis-cli ping')
+    })
+    it('native 模式已装即满足；未装 → apt 安装 + ping', () => {
+        expect(r.converge('7', { installed: true, version: '6.0.16' }, {}).satisfied).toBe(true)
+        const plan = r.converge('7', { installed: false, version: null }, {})
+        expect(plan.steps[0].command).toContain('apt-get install -y redis-server')
+        expect(plan.steps[plan.steps.length - 1].command).toBe('redis-cli ping')
+    })
+})
+
+describe('recipe: mysql（docker|native，rootPassword 脱敏）', () => {
+    const r = RECIPES.mysql
+    it('parse 取 Ver X.Y.Z', () => {
+        expect(r.parse('mysqld  Ver 8.0.35 for Linux on x86_64')).toEqual({ installed: true, version: '8.0.35' })
+    })
+    it('docker 模式：run 容器命令含明文密码，display 脱敏为 ***（不泄漏给 --json/审计）', () => {
+        const plan = r.converge('8', { installed: false, version: null }, { mode: 'docker', rootPassword: 's3cret' })
+        expect(plan.steps[0].command).toContain("MYSQL_ROOT_PASSWORD='s3cret'")
+        expect(plan.steps[0].display).toContain("MYSQL_ROOT_PASSWORD='***'")
+        expect(plan.steps[0].display).not.toContain('s3cret')
+        expect(plan.steps[1].command).toBe('docker exec wink-mysql mysqladmin ping')
+    })
+    it('docker 模式缺 rootPassword → 抛错', () => {
+        expect(() => r.converge('8', { installed: false, version: null }, { mode: 'docker' })).toThrow(/rootPassword/)
+    })
+    it('native 模式：apt 安装 + 设密码（display 脱敏）+ ping', () => {
+        const plan = r.converge('8', { installed: false, version: null }, { rootPassword: 'pw' })
+        expect(plan.steps[0].command).toContain('apt-get install -y mysql-server')
+        const setPwd = plan.steps.find((s) => s.command.includes('mysqladmin -u root password'))
+        expect(setPwd?.display).toContain("password '***'")
+        expect(setPwd?.command).toContain("password 'pw'")
     })
 })

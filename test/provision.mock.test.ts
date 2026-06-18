@@ -66,7 +66,7 @@ describe('provision 安全护栏', () => {
     })
 
     it('不支持的组件 → 抛错且不建立连接（护栏进 core）', async () => {
-        await expect(provision(base({ redis: 7 }, { dryRun: true }))).rejects.toThrow(/不支持的组件/)
+        await expect(provision(base({ postgres: 14 }, { dryRun: true }))).rejects.toThrow(/不支持的组件/)
         expect(h.state.execs).toHaveLength(0)
     })
 
@@ -141,5 +141,25 @@ describe('provision 执行（--yes）', () => {
 
     it('only 指定 stack 未声明的组件 → 抛错', async () => {
         await expect(provision(base({ docker: true }), { yes: true, only: ['nodejs'] })).rejects.toThrow(/未声明/)
+    })
+
+    it('mysql docker：结果只暴露脱敏命令，root 密码不泄漏到 executed/--json', async () => {
+        h.state.responses = [{ match: 'mysqld --version', stdout: '' }] // 容器内检测：未安装
+        const r = await provision(base({ mysql: { version: 8, mode: 'docker', rootPassword: 's3cret-pw' } }), {
+            yes: true,
+        })
+        const cmds = r.components[0].executed.map((s) => s.command).join('\n')
+        expect(cmds).toContain("MYSQL_ROOT_PASSWORD='***'")
+        expect(cmds).not.toContain('s3cret-pw') // 明文密码绝不出现在结构化结果里
+    })
+
+    it('mysql docker dry-run：planned 也用脱敏命令', async () => {
+        h.state.responses = [{ match: 'mysqld --version', stdout: '' }]
+        const r = await provision(
+            base({ mysql: { version: 8, mode: 'docker', rootPassword: 's3cret-pw' } }, { dryRun: true })
+        )
+        const planned = r.components[0].planned.map((s) => s.command).join('\n')
+        expect(planned).not.toContain('s3cret-pw')
+        expect(planned).toContain("MYSQL_ROOT_PASSWORD='***'")
     })
 })

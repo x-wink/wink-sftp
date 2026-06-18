@@ -288,22 +288,21 @@ const main = async (): Promise<void> => {
             cfgProv,
             JSON.stringify({
                 connect: { host: '127.0.0.1', port: Number(port), username: 'tester', password: 'pw' },
-                stack: { docker: true },
+                // 多组件：docker（布尔）+ nginx（原生）+ redis（native 对象形态）——验证各 detect 经真 shell 跑通
+                stack: { docker: true, nginx: 'latest', redis: { version: 7, mode: 'native' } },
             })
         )
         r = await runCli(['provision', '-c', cfgProv, '--dry-run', '--json'])
         const comps = r.json.components as
-            | { component: string; executed: unknown[]; detected: { installed: boolean } }[]
+            | { component: string; executed: unknown[]; planned: unknown[]; detected: { installed: boolean } }[]
             | undefined
         check(
-            'ok && dryRun && 含 docker 组件且预演不执行步骤',
+            'ok && dryRun && 三组件均检测出且预演不执行步骤',
             r.json.ok === true &&
                 r.json.dryRun === true &&
                 Array.isArray(comps) &&
-                comps.length === 1 &&
-                comps[0].component === 'docker' &&
-                comps[0].executed.length === 0 &&
-                typeof comps[0].detected.installed === 'boolean',
+                comps.length === 3 &&
+                comps.every((c) => c.executed.length === 0 && typeof c.detected.installed === 'boolean'),
             r.json
         )
 
@@ -317,7 +316,7 @@ const main = async (): Promise<void> => {
             cfgBad,
             JSON.stringify({
                 connect: { host: '127.0.0.1', port: Number(port), username: 'tester', password: 'pw' },
-                stack: { redis: 7 },
+                stack: { postgres: 14 },
             })
         )
         r = await runCli(['provision', '-c', cfgBad, '--dry-run', '--json'])
