@@ -1,3 +1,23 @@
+## v2.3.0
+
+[compare changes](https://github.com/x-wink/wink-sftp/compare/v2.2.0...v2.3.0)
+
+### 🚀 Enhancements
+
+- 新增 provision 环境初始化原语（语言运行时 + Docker 批） ([6965374](https://github.com/x-wink/wink-sftp/commit/6965374))
+
+### 🩹 Fixes
+
+- **provision:** 修复发版前 code-review 发现的边角问题 ([f15476d](https://github.com/x-wink/wink-sftp/commit/f15476d))
+
+### 📖 Documentation
+
+- 新增 ops/provision 技能并把技能同步纳入发版前规约 ([48939c5](https://github.com/x-wink/wink-sftp/commit/48939c5))
+
+### ❤️ Contributors
+
+- 向文可 <1041367524@qq.com>
+
 ## v2.2.0
 
 [compare changes](https://github.com/x-wink/wink-sftp/compare/v2.1.0...v2.2.0)
