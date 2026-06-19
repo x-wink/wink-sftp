@@ -13,7 +13,7 @@ body:
       id: proposal
       attributes:
           label: 期望的方案
-          description: 你希望 wink-sftp 怎么做？CLI / 配置长什么样？
+          description: 你希望 winkops 怎么做？CLI / 配置长什么样？
       validations:
           required: true
     - type: textarea

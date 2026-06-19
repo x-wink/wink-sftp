@@ -1,11 +1,11 @@
 ---
 name: pull
-description: 用 wink-sftp 从远程服务器下载文件/目录到本地（pull），或列出/浏览远程目录内容（ls）。当用户要「从服务器拉取 / 下载远程文件」、「把远程 dist 拉到本地」、「看看服务器某目录下有什么 / 列出远程目录」、或在部署前后核对远程文件时使用。只读/下载类操作，不修改远程。
+description: 用 winkops 从远程服务器下载文件/目录到本地（pull），或列出/浏览远程目录内容（ls）。当用户要「从服务器拉取 / 下载远程文件」、「把远程 dist 拉到本地」、「看看服务器某目录下有什么 / 列出远程目录」、或在部署前后核对远程文件时使用。只读/下载类操作，不修改远程。
 ---
 
-# wink-sftp 远程下载与浏览
+# winkops 远程下载与浏览
 
-`wink-sftp` 的两个**远程只读 / 下载**子命令：
+`winkops` 的两个**远程只读 / 下载**子命令：
 
 - `pull` — 把远程文件或目录下载到本地（`fastGet`，目录递归镜像 + 受限并发/重试）。
 - `ls` — 列出远程目录内容（纯只读，不下载、不修改）。
@@ -18,7 +18,7 @@ description: 用 wink-sftp 从远程服务器下载文件/目录到本地（pull
     - **退出码**：0 成功；2 配置错误；3 连接失败；5 下载失败（`pull`）；`ls` 失败为通用码 1（目录不存在等则按错误类型，常见为传输 5）。
     - **`--json`**：`ok` 为总判定；`pull` 的 `failed[]` 列出失败项，`ls` 的 `entries[]` 为目录项。
 2. **凭据不外泄**：优先密钥登录（`--connect-private-key`），debug 已对 `password`/`passphrase`/`privateKey` 脱敏，勿回显明文。
-3. **登录与配置同 deploy**：支持 `-c sftp.json`（JSON/YAML）、`${ENV_VAR}` secrets、多环境 `--env <name>`；连接也可用纯 CLI 参数（`-h`/`-p`/`-u`/`--connect-password` 或 `--connect-private-key`）。
+3. **登录与配置同 deploy**：支持 `-c wink.json`（JSON/YAML）、`${ENV_VAR}` secrets、多环境 `--env <name>`；连接也可用纯 CLI 参数（`-h`/`-p`/`-u`/`--connect-password` 或 `--connect-private-key`）。
 
 ## pull — 下载
 
@@ -26,10 +26,10 @@ description: 用 wink-sftp 从远程服务器下载文件/目录到本地（pull
 
 ```bash
 # 配置文件方式（local=本地目标，remote=远程源）
-wink-sftp pull -c sftp.json --json
+winkops pull -c wink.json --json
 
 # 纯 CLI 方式
-wink-sftp pull -r /var/www/app -l ./backup \
+winkops pull -r /var/www/app -l ./backup \
   -h 1.2.3.4 -p 22 -u root --connect-private-key ~/.ssh/id_ed25519 --json
 ```
 
@@ -52,8 +52,8 @@ wink-sftp pull -r /var/www/app -l ./backup \
 
 ```bash
 # remote 可作位置参数，也可用 -r；不带 -c 时直接给连接参数
-wink-sftp ls /var/www/app -h 1.2.3.4 -u root --connect-password '***' --json
-wink-sftp ls -c sftp.json -r /var/log --json
+winkops ls /var/www/app -h 1.2.3.4 -u root --connect-password '***' --json
+winkops ls -c wink.json -r /var/log --json
 ```
 
 `--json` 结果（`LsResult`）：

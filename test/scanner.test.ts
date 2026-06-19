@@ -80,7 +80,7 @@ describe('loadIgnorePatterns', () => {
     })
     afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
 
-    it('读取 .winksftpignore 并合并内联规则，追加忽略文件自身', () => {
+    it('读取 .winkignore 并合并内联规则，追加忽略文件自身', () => {
         const patterns = loadIgnorePatterns(dir, ['dist/'])
         expect(patterns).toContain('dist/')
         expect(patterns).toContain('*.log')
@@ -97,7 +97,7 @@ describe('loadIgnorePatterns', () => {
         }
     })
 
-    it('.winksftpignore 规则经 scan 端到端生效', () => {
+    it('.winkignore 规则经 scan 端到端生效', () => {
         fs.writeFileSync(path.join(dir, 'keep.js'), '')
         fs.writeFileSync(path.join(dir, 'drop.log'), '')
         const { files } = scan(dir, { ignorePatterns: loadIgnorePatterns(dir) })

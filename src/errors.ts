@@ -8,7 +8,7 @@
  * - 4 远程命令失败
  * - 5 文件传输失败
  */
-export abstract class WinkSftpError extends Error {
+export abstract class WinkOpsError extends Error {
     /** 进程退出码。 */
     abstract readonly exitCode: number
     /** 机器可读的错误种类。 */
@@ -23,19 +23,19 @@ export abstract class WinkSftpError extends Error {
 }
 
 /** 配置缺失或非法。 */
-export class ConfigError extends WinkSftpError {
+export class ConfigError extends WinkOpsError {
     readonly exitCode = 2
     readonly kind = 'config'
 }
 
 /** SSH 连接失败 / 超时。 */
-export class ConnectionError extends WinkSftpError {
+export class ConnectionError extends WinkOpsError {
     readonly exitCode = 3
     readonly kind = 'connection'
 }
 
 /** 远程命令执行失败（退出码非零或无法启动）。 */
-export class RemoteCommandError extends WinkSftpError {
+export class RemoteCommandError extends WinkOpsError {
     readonly exitCode = 4
     readonly kind = 'remote-command'
     readonly command: string
@@ -55,10 +55,10 @@ export class RemoteCommandError extends WinkSftpError {
 }
 
 /** 文件传输失败。 */
-export class TransferError extends WinkSftpError {
+export class TransferError extends WinkOpsError {
     readonly exitCode = 5
     readonly kind = 'transfer'
 }
 
 /** 从任意抛出值推导退出码：识别类型化错误，否则按通用错误返回 1。 */
-export const exitCodeOf = (e: unknown): number => (e instanceof WinkSftpError ? e.exitCode : 1)
+export const exitCodeOf = (e: unknown): number => (e instanceof WinkOpsError ? e.exitCode : 1)

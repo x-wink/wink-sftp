@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢你愿意为 `@xwink/sftp`（`wink-sftp`）出力！本项目用中文协作，提交信息、CLI 文案与文档均用中文。
+感谢你愿意为 `@xwink/ops`（`winkops`）出力！本项目用中文协作，提交信息、CLI 文案与文档均用中文。
 
 ## 开发环境
 
@@ -8,7 +8,7 @@
 
 ```bash
 pnpm install
-pnpm dev            # tsx 直接跑 src/index.ts -c sftp.json（无需构建）
+pnpm dev            # tsx 直接跑 src/index.ts -c wink.json（无需构建）
 ```
 
 ## 常用命令

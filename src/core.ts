@@ -12,11 +12,11 @@ import { Logger } from './logger'
 import { withSession } from './session'
 import type { SshSession } from './session'
 import { backupRemote, restoreRemote } from './guard'
-import { ConfigError, TransferError, WinkSftpError } from './errors'
+import { ConfigError, TransferError, WinkOpsError } from './errors'
 
 export interface SftpOption {
     excludes?: string[]
-    /** gitignore 风格忽略规则（与本地根目录下的 `.winksftpignore` 合并），按 glob 匹配。 */
+    /** gitignore 风格忽略规则（与本地根目录下的 `.winkignore` 合并），按 glob 匹配。 */
     ignore?: string[]
     flat?: boolean
     clear?: boolean
@@ -59,7 +59,7 @@ export interface RunOption {
     dryRun?: boolean
     /** 是否记录本地审计日志（默认 true；预演不记录）。 */
     audit?: boolean
-    /** 审计日志文件路径（默认 `~/.wink-sftp/audit.log`）。 */
+    /** 审计日志文件路径（默认 `~/.winkops/audit.log`）。 */
     auditLog?: string
     /** 选择的环境名（多环境配置），对应配置文件 `environments` 下的键。 */
     env?: string
@@ -492,7 +492,7 @@ const deployHost = async (
         const result = await run(perHost)
         return { host, ok: result.ok, result }
     } catch (e) {
-        const kind = e instanceof WinkSftpError ? e.kind : 'error'
+        const kind = e instanceof WinkOpsError ? e.kind : 'error'
         return { host, ok: false, error: { kind, message: e instanceof Error ? e.message : String(e) } }
     }
 }

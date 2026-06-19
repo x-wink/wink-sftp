@@ -27,13 +27,13 @@ const validConfig = {
 
 describe('loadConfigFile', () => {
     it('解析 JSON 配置', () => {
-        const p = write('sftp.json', JSON.stringify(validConfig))
+        const p = write('wink.json', JSON.stringify(validConfig))
         expect(loadConfigFile(p)).toMatchObject(validConfig)
     })
 
     it('解析 YAML 配置（.yaml）', () => {
         const p = write(
-            'sftp.yaml',
+            'wink.yaml',
             [
                 'connect:',
                 '  host: h',
@@ -48,7 +48,7 @@ describe('loadConfigFile', () => {
     })
 
     it('解析 YAML 配置（.yml）', () => {
-        const p = write('sftp.yml', 'local: ./dist\nremote: /apps/app\n')
+        const p = write('wink.yml', 'local: ./dist\nremote: /apps/app\n')
         expect(loadConfigFile(p)).toMatchObject({ local: './dist', remote: '/apps/app' })
     })
 
@@ -79,7 +79,7 @@ describe('loadConfigFile', () => {
 
 describe('resolveConfig', () => {
     it('从文件加载并归一化', () => {
-        const p = write('sftp.json', JSON.stringify(validConfig))
+        const p = write('wink.json', JSON.stringify(validConfig))
         const r = resolveConfig({ config: p })
         expect(r.local).toBe('./dist')
         expect(r.connect.host).toBe('h')
@@ -88,7 +88,7 @@ describe('resolveConfig', () => {
 
     it('YAML 文件同样可被 resolveConfig 解析', () => {
         const p = write(
-            'sftp.yaml',
+            'wink.yaml',
             'connect:\n  host: h\n  port: 22\n  username: u\n  password: pw\nlocal: ./dist\nremote: /apps/app\n'
         )
         const r = resolveConfig({ config: p })
@@ -96,13 +96,13 @@ describe('resolveConfig', () => {
     })
 
     it('调用级 --no-audit 覆盖文件 audit:true', () => {
-        const p = write('sftp.json', JSON.stringify({ ...validConfig, audit: true }))
+        const p = write('wink.json', JSON.stringify({ ...validConfig, audit: true }))
         expect(resolveConfig({ config: p, audit: false }).audit).toBe(false)
     })
 
     it('缺认证字段抛 ConfigError', () => {
         const p = write(
-            'sftp.json',
+            'wink.json',
             JSON.stringify({ ...validConfig, connect: { host: 'h', port: 22, username: 'u' } })
         )
         expect(() => resolveConfig({ config: p })).toThrow(/connect\.password 或 connect\.privateKey/)
@@ -165,7 +165,7 @@ describe('多环境 --env', () => {
     }
 
     it('选中环境深合并到基础配置之上', () => {
-        const p = write('sftp.json', JSON.stringify(multiEnv))
+        const p = write('wink.json', JSON.stringify(multiEnv))
         const r = resolveConfig({ config: p, env: 'prod' })
         expect(r.connect.host).toBe('prod-host')
         expect(r.connect.username).toBe('u') // 基础配置保留
@@ -173,34 +173,34 @@ describe('多环境 --env', () => {
     })
 
     it('未选环境时使用基础配置', () => {
-        const p = write('sftp.json', JSON.stringify(multiEnv))
+        const p = write('wink.json', JSON.stringify(multiEnv))
         expect(resolveConfig({ config: p }).connect.host).toBe('base')
     })
 
     it('选了不存在的环境抛 ConfigError 并列出可用环境', () => {
-        const p = write('sftp.json', JSON.stringify(multiEnv))
+        const p = write('wink.json', JSON.stringify(multiEnv))
         expect(() => resolveConfig({ config: p, env: 'staging' })).toThrow(/未找到环境配置.*prod.*dev/s)
     })
 
     it('配置文件可设默认 env，未传 --env 时生效', () => {
-        const p = write('sftp.json', JSON.stringify({ ...multiEnv, env: 'prod' }))
+        const p = write('wink.json', JSON.stringify({ ...multiEnv, env: 'prod' }))
         expect(resolveConfig({ config: p }).connect.host).toBe('prod-host')
     })
 
     it('CLI/编程式 --env 覆盖文件默认 env', () => {
-        const p = write('sftp.json', JSON.stringify({ ...multiEnv, env: 'prod' }))
+        const p = write('wink.json', JSON.stringify({ ...multiEnv, env: 'prod' }))
         expect(resolveConfig({ config: p, env: 'dev' }).connect.host).toBe('dev-host')
     })
 })
 
 describe('统一深度合并优先级（文件 ← 环境 ← 显式参数）', () => {
     it('显式 remote 覆盖配置文件 remote', () => {
-        const p = write('sftp.json', JSON.stringify(validConfig))
+        const p = write('wink.json', JSON.stringify(validConfig))
         expect(resolveConfig({ config: p, remote: '/override' }).remote).toBe('/override')
     })
 
     it('显式 connect.host 覆盖，文件其余 connect 字段保留', () => {
-        const p = write('sftp.json', JSON.stringify(validConfig))
+        const p = write('wink.json', JSON.stringify(validConfig))
         const r = resolveConfig({ config: p, connect: { host: 'cli-host' } })
         expect(r.connect.host).toBe('cli-host')
         expect(r.connect.username).toBe('u') // 来自文件
@@ -208,7 +208,7 @@ describe('统一深度合并优先级（文件 ← 环境 ← 显式参数）', 
     })
 
     it('未显式设置的字段不覆盖文件值', () => {
-        const p = write('sftp.json', JSON.stringify(validConfig))
+        const p = write('wink.json', JSON.stringify(validConfig))
         // connect 全 undefined 不应抹掉文件的 host
         const r = resolveConfig({ config: p, connect: { host: undefined } })
         expect(r.connect.host).toBe('h')
@@ -216,7 +216,7 @@ describe('统一深度合并优先级（文件 ← 环境 ← 显式参数）', 
 
     it('显式参数优先于选中环境覆盖', () => {
         const p = write(
-            'sftp.json',
+            'wink.json',
             JSON.stringify({
                 ...validConfig,
                 environments: { prod: { remote: '/prod', connect: { host: 'prod-host' } } },
@@ -230,7 +230,7 @@ describe('统一深度合并优先级（文件 ← 环境 ← 显式参数）', 
 
 describe('provision stack 配置', () => {
     it('从文件加载 stack；未声明时为空对象', () => {
-        const p = write('sftp.json', JSON.stringify({ ...validConfig, stack: { nodejs: '20', docker: true } }))
+        const p = write('wink.json', JSON.stringify({ ...validConfig, stack: { nodejs: '20', docker: true } }))
         expect(resolveConfig({ config: p }).stack).toEqual({ nodejs: '20', docker: true })
         const p2 = write('plain.json', JSON.stringify(validConfig))
         expect(resolveConfig({ config: p2 }).stack).toEqual({})
@@ -238,7 +238,7 @@ describe('provision stack 配置', () => {
 
     it('environments 深合并覆盖 stack（选中环境追加/覆盖组件）', () => {
         const p = write(
-            'sftp.json',
+            'wink.json',
             JSON.stringify({
                 ...validConfig,
                 stack: { nodejs: '18' },
@@ -263,7 +263,7 @@ describe('loadConfigFile + secrets', () => {
     it('从 process.env 注入 ${VAR}', () => {
         process.env.WINK_TEST_PWD = 'injected-pw'
         const p = write(
-            'sftp.json',
+            'wink.json',
             JSON.stringify({ ...validConfig, connect: { ...validConfig.connect, password: '${WINK_TEST_PWD}' } })
         )
         try {
@@ -275,7 +275,7 @@ describe('loadConfigFile + secrets', () => {
 
     it('引用未定义变量抛 ConfigError', () => {
         const p = write(
-            'sftp.json',
+            'wink.json',
             JSON.stringify({ ...validConfig, connect: { ...validConfig.connect, password: '${WINK_UNDEFINED_VAR}' } })
         )
         expect(() => loadConfigFile(p)).toThrow(/未定义的环境变量.*WINK_UNDEFINED_VAR/s)
@@ -286,7 +286,7 @@ describe('loadConfigFile + secrets', () => {
         process.chdir(dir)
         fs.writeFileSync(path.join(dir, '.env'), 'WINK_DOTENV_PWD=from-dotenv\n')
         const p = write(
-            'sftp.json',
+            'wink.json',
             JSON.stringify({ ...validConfig, connect: { ...validConfig.connect, password: '${WINK_DOTENV_PWD}' } })
         )
         try {

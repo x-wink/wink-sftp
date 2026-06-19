@@ -13,8 +13,8 @@ describe('formatAuditLine', () => {
 })
 
 describe('defaultAuditPath', () => {
-    it('位于用户主目录下的 .wink-sftp/audit.log', () => {
-        expect(defaultAuditPath()).toBe(path.join(os.homedir(), '.wink-sftp', 'audit.log'))
+    it('位于用户主目录下的 .winkops/audit.log', () => {
+        expect(defaultAuditPath()).toBe(path.join(os.homedir(), '.winkops', 'audit.log'))
     })
 })
 

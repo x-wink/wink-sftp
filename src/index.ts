@@ -2,7 +2,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { Command } from 'commander'
-import { name, version, description } from '../package.json'
+import { version, description } from '../package.json'
 import type {
     RunOption,
     SftpOption,
@@ -37,10 +37,10 @@ import { edit } from './edit'
 import type { EditResult } from './edit'
 import { provision } from './provision'
 import type { ProvisionResult } from './provision'
-import { ConfigError, exitCodeOf, WinkSftpError } from './errors'
+import { ConfigError, exitCodeOf, WinkOpsError } from './errors'
 
 const program = new Command()
-program.name(name).version(version).description(description)
+program.name('winkops').version(version).description(description)
 // 释放 -h 给 connect-host（沿用本工具历史用法），help 仅保留 --help
 program.helpOption('--help', '显示帮助信息')
 
@@ -108,7 +108,7 @@ const execute = async <T extends { ok: boolean }>(
 
 /** 统一错误出口：--json 输出 `{ok:false,kind,error}`，否则人类信息；按错误类型定退出码。 */
 const handleError = (e: unknown, json: boolean): void => {
-    const kind = e instanceof WinkSftpError ? e.kind : 'error'
+    const kind = e instanceof WinkOpsError ? e.kind : 'error'
     const message = e instanceof Error ? e.message : String(e)
     if (json) {
         process.stdout.write(JSON.stringify({ ok: false, kind, error: message }) + '\n')
@@ -269,9 +269,9 @@ addConnectionOptions(program.command('deploy', { isDefault: true }))
     .option('-r --remote <remote>', '远程路径')
     .option('--dry-run', '预演：打印将执行的动作但不建立连接、不落地')
     .option('--no-audit', '禁用本地审计日志')
-    .option('--audit-log <path>', '审计日志文件路径，默认 ~/.wink-sftp/audit.log')
+    .option('--audit-log <path>', '审计日志文件路径，默认 ~/.winkops/audit.log')
     .option('-e --sftp-excludes <paths>', '要排除的本地目录，暂时只支持全字匹配，多个目录用英文逗号分隔，默认为空')
-    .option('--sftp-ignore <patterns>', 'gitignore 风格忽略规则，多个用英文逗号分隔（与 .winksftpignore 合并）')
+    .option('--sftp-ignore <patterns>', 'gitignore 风格忽略规则，多个用英文逗号分隔（与 .winkignore 合并）')
     .option('-f --sftp-flat', '是否扁平化目录（本地文件夹下任意深度的文件都直接传输到远程文件夹下），默认为false')
     .option('--sftp-clear', '是否在传输开始前清空远程文件夹，默认为false。慎用！删错了你别怪我！')
     .option('-o --sftp-override', '是否覆盖远程文件夹中已存在的文件，默认为false')
@@ -520,7 +520,7 @@ addConnectionOptions(program.command('provision'))
     .option('--dry-run', '预演：检测当前状态并打印将执行的步骤，但不落地')
     .option('--yes', '确认执行写操作（安装/收敛步骤）')
     .option('--no-audit', '禁用本地审计日志')
-    .option('--audit-log <path>', '审计日志文件路径，默认 ~/.wink-sftp/audit.log')
+    .option('--audit-log <path>', '审计日志文件路径，默认 ~/.winkops/audit.log')
     .action(async (components: string[], options: Record<string, unknown>) => {
         await execute(
             Boolean(options.json),

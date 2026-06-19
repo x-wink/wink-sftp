@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import ignore from 'ignore'
 
 /** 本地根目录下的忽略规则文件名（gitignore 风格）。 */
-export const IGNORE_FILE = '.winksftpignore'
+export const IGNORE_FILE = '.winkignore'
 
 export interface ScanOptions {
     /** 忽略隐藏文件/目录（任意以 `.` 开头的路径段），默认 true。 */
@@ -15,7 +15,7 @@ export interface ScanOptions {
 }
 
 /**
- * 汇集忽略规则：读取本地根目录下的 `.winksftpignore`（若存在）并拼上 `inline` 规则，
+ * 汇集忽略规则：读取本地根目录下的 `.winkignore`（若存在）并拼上 `inline` 规则，
  * 再追加忽略文件自身（不上传）。空行与 `#` 注释交由 `ignore` 处理。读失败仅静默返回内联规则。
  */
 export const loadIgnorePatterns = (root: string, inline: string[] = []): string[] => {

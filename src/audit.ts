@@ -20,8 +20,8 @@ export interface AuditRecord {
     detail?: Record<string, unknown>
 }
 
-/** 默认审计日志路径：`~/.wink-sftp/audit.log`。 */
-export const defaultAuditPath = (): string => path.join(os.homedir(), '.wink-sftp', 'audit.log')
+/** 默认审计日志路径：`~/.winkops/audit.log`。 */
+export const defaultAuditPath = (): string => path.join(os.homedir(), '.winkops', 'audit.log')
 
 /** 把审计记录序列化为单行 JSON（含结尾换行）。纯函数，便于测试。 */
 export const formatAuditLine = (record: AuditRecord): string => JSON.stringify(record) + '\n'

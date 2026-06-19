@@ -1,6 +1,6 @@
 # 🏛️ 架构设计总纲
 
-> 本文档定义 `@xwink/sftp` 的技术栈、分层架构、安全主线与命令面。迭代节奏与阶段划分见 [ROADMAP.md](./ROADMAP.md)。
+> 本文档定义 `@xwink/ops` 的技术栈、分层架构、安全主线与命令面。迭代节奏与阶段划分见 [ROADMAP.md](./ROADMAP.md)。
 
 ## 一、愿景与边界
 
@@ -52,7 +52,7 @@
 - **模块体系**：CJS（ssh2 为 CJS，CLI 场景无需 ESM）。
 - **采集模型**：agentless（纯 SSH 解析、零安装），可对接已有 exporter；不自建 remote agent。
 - **运行模型**：on-demand 快照 + 前台 TUI 为主，daemon 常驻告警为可选。
-- **包名**：保留 `@xwink/sftp`（umbrella 命名待运维支柱成熟后评估）。
+- **包名**：保留 `@xwink/ops`（umbrella 命名待运维支柱成熟后评估）。
 - **provision**：策划式固定栈 recipes（非通用 CM）；Ubuntu/Debian 优先；语言运行时用版本管理器（nvm/sdkman/pyenv）；mysql/redis 的 Docker / 原生形态由 stack 的 `mode` 决定。
 
 ## 四、分层架构
@@ -130,7 +130,7 @@ src/
 | `ps` / `service`  | 写    | 进程/服务管理                                                                                          |
 | `edit`            | 写    | 守护式远程配置编辑                                                                                     |
 
-**输出纪律**：`--json` 机器输出只走 **stdout**；人类日志/进度/debug 走 **stderr**。保证 `wink-sftp ... --json | jq` 成立，也是 agent 可靠解析的基础。
+**输出纪律**：`--json` 机器输出只走 **stdout**；人类日志/进度/debug 走 **stderr**。保证 `winkops ... --json | jq` 成立，也是 agent 可靠解析的基础。
 
 **退出码**：成功 0；配置错误 / 连接失败 / 执行失败用不同非零码，便于脚本与 agent 分支。
 
@@ -173,7 +173,7 @@ stack:
     mysql: { version: 8, mode: native, rootPassword: '${MYSQL_ROOT_PWD}' } # mode: docker|native
 ```
 
-`wink-sftp provision --stack prod` 将服务器**收敛**到此状态；`--dry-run` 出 diff，`--yes` 才执行。
+`winkops provision --stack prod` 将服务器**收敛**到此状态；`--dry-run` 出 diff，`--yes` 才执行。
 
 **关键设计决策**：
 

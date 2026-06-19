@@ -291,7 +291,7 @@ describe('deploy（mock ssh2）', () => {
     // 回归：CLI --no-audit（options.audit === false）必须覆盖配置文件 audit:true
     it('CLI --no-audit 覆盖配置文件 audit:true', async () => {
         const auditLog = path.join(localDir, 'audit.log')
-        const cfgPath = path.join(localDir, 'sftp.json')
+        const cfgPath = path.join(localDir, 'wink.json')
         fs.writeFileSync(
             cfgPath,
             JSON.stringify({
@@ -309,7 +309,7 @@ describe('deploy（mock ssh2）', () => {
 
     it('配置文件 audit:true 且未传 --no-audit 时照常写审计（对照）', async () => {
         const auditLog = path.join(localDir, 'audit.log')
-        const cfgPath = path.join(localDir, 'sftp.json')
+        const cfgPath = path.join(localDir, 'wink.json')
         fs.writeFileSync(
             cfgPath,
             JSON.stringify({

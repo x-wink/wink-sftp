@@ -1,13 +1,16 @@
 {
-    "name": "@xwink/sftp",
-    "version": "3.0.0",
+    "name": "@xwink/ops",
+    "version": "1.0.0",
     "private": false,
-    "description": "远程部署SFTP工具",
+    "description": "面向个人开发者与 AI Agent 的 agentless SSH 快捷操作入口：部署、运维与环境初始化",
     "keywords": [
-        "command",
-        "remote publish",
+        "ssh",
         "sftp",
-        "ssh"
+        "deploy",
+        "provision",
+        "devops",
+        "agentless",
+        "cli"
     ],
     "license": "MIT",
     "author": {
@@ -17,10 +20,10 @@
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/x-wink/wink-sftp.git"
+        "url": "git+https://github.com/x-wink/winkops.git"
     },
     "bin": {
-        "wink-sftp": "dist/index.js"
+        "winkops": "dist/index.js"
     },
     "files": [
         "dist/src/*.d.ts",
@@ -41,7 +44,7 @@
         "access": "public"
     },
     "scripts": {
-        "dev": "tsx src/index.ts -c sftp.json",
+        "dev": "tsx src/index.ts -c wink.json",
         "test": "vitest run",
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",

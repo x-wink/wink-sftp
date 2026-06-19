@@ -6,5 +6,5 @@ coverage
 stats.html
 *.local
 package-lock.json
-sftp.json
+wink.json
 .env

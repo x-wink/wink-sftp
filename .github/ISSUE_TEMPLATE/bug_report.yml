@@ -1,5 +1,5 @@
 name: 🐛 Bug 反馈
-description: 报告 wink-sftp 的缺陷或异常行为
+description: 报告 winkops 的缺陷或异常行为
 labels: [bug]
 body:
     - type: markdown
@@ -18,8 +18,8 @@ body:
           label: 复现步骤
           description: 命令 / 配置（脱敏后）/ 操作顺序
           placeholder: |
-              1. 配置 sftp.json 如下（已脱敏）……
-              2. 执行 `wink-sftp -c sftp.json --json`
+              1. 配置 wink.json 如下（已脱敏）……
+              2. 执行 `winkops -c wink.json --json`
               3. 看到……
       validations:
           required: true
@@ -33,9 +33,9 @@ body:
       id: env
       attributes:
           label: 环境
-          description: wink-sftp 版本、Node 版本、操作系统、远程服务器系统
+          description: winkops 版本、Node 版本、操作系统、远程服务器系统
           placeholder: |
-              - wink-sftp: 1.1.0
+              - winkops: 1.0.0
               - Node: 22.x
               - OS: Windows 11 / macOS / Ubuntu
       validations:

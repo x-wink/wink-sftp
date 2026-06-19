@@ -74,7 +74,7 @@ const main = async (): Promise<void> => {
     fs.writeFileSync(path.join(dist, 'index.html'), 'hi')
     fs.writeFileSync(path.join(dist, 'app.log'), 'log')
     fs.writeFileSync(path.join(dist, 'secret', 'k'), 'sec')
-    fs.writeFileSync(path.join(dist, '.winksftpignore'), '*.log\nsecret/\n')
+    fs.writeFileSync(path.join(dist, '.winkignore'), '*.log\nsecret/\n')
 
     const keyPath = path.join(tmp, 'id_e2e')
     fs.writeFileSync(keyPath, generateTestKey(), { mode: 0o600 })
@@ -84,7 +84,7 @@ const main = async (): Promise<void> => {
     const key = ['--connect-private-key', keyPath]
 
     try {
-        console.log('1) deploy --dry-run + .winksftpignore（密码登录）')
+        console.log('1) deploy --dry-run + .winkignore（密码登录）')
         let r = await runCli(['-l', dist, '-r', remote, '--dry-run', '--json', ...conn(pw)])
         check('ok && dryRun', r.json.ok === true && r.json.dryRun === true, r.json)
         check(
@@ -137,7 +137,7 @@ const main = async (): Promise<void> => {
         console.log('8) 多环境 + ${ENV_VAR} secrets（YAML 配置）')
         const prodRemote = path.join(tmp, 'remote-prod')
         fs.mkdirSync(prodRemote, { recursive: true })
-        const cfg = path.join(tmp, 'sftp.yaml')
+        const cfg = path.join(tmp, 'wink.yaml')
         fs.writeFileSync(
             cfg,
             [

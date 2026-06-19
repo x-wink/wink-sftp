@@ -29,7 +29,7 @@ export interface LoggerOptions {
 
 /**
  * 分级日志：人类可读日志一律走 **stderr**；机器可读结果（`--json`）走 **stdout**。
- * 保证 `wink-sftp ... --json | jq` 成立。
+ * 保证 `winkops ... --json | jq` 成立。
  */
 export class Logger {
     constructor(private readonly options: LoggerOptions = {}) {}
